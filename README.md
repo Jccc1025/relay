@@ -477,20 +477,20 @@ where the harness has one:
 
 | Harness | Protocol | GPT | Gemini | Claude |
 | --- | --- | --- | --- | --- |
-| Codex 0.160 | Responses | ✅ ChatGPT login | | |
-| Claude Code 2.1.283 | Messages | ✅ via LiteLLM² | | ✅ subscription login |
-| Gemini CLI 0.62 | Gemini | ✅ via LiteLLM² | ✅ | |
-| pi 1.0 | Responses / Gemini | ✅ | ✅ | |
-| OpenCode 1.18 | Responses / Gemini | ✅ | ⚠️¹ | |
+| Codex 0.162 | Responses | ✅ ChatGPT login | | |
+| Claude Code 2.1.294 | Messages | ✅ via LiteLLM² | | ✅ subscription login |
+| Gemini CLI 0.63 | Gemini | ✅ via LiteLLM² | ✅ | |
+| pi 1.1 | Responses / Gemini | ✅ | ✅ | |
+| OpenCode 1.19 | Responses / Gemini | ✅ | ⚠️¹ | |
 | Kilo CLI 7.8 | Responses / Gemini | ✅ | ✅ | |
-| Crush 0.97 | Chat Completions / Gemini | ✅ | ✅ | |
-| OpenClaw 2026.9 | Responses / Gemini | ✅ | ✅ | |
-| Goose 1.52 | Responses / Gemini | ✅ | ✅ | |
+| Crush 0.98 | Chat Completions / Gemini | ✅ | ✅ | |
+| OpenClaw 2026.10 | Responses / Gemini | ✅ | ✅ | |
+| Goose 1.54 | Responses / Gemini | ✅ | ✅ | |
 | Kimi Code 2.1 | Responses / Gemini | ✅ | ✅ (gemini-2.5-flash-lite) | |
 | Hermes Agent 0.19 | Responses / Chat Completions | ✅ | ✅ | |
 | nanobot 0.3.5 | Responses / Chat Completions | ✅ | ✅ | |
 | DeepSeek Harness 0.2 | Responses / Gemini | ✅ | ✅ | |
-| WorkBuddy (CodeBuddy Code 2.161) | Chat Completions | ✅³ | ✅ | |
+| WorkBuddy (CodeBuddy Code 2.164) | Chat Completions | ✅³ | ✅ | |
 | mini-swe-agent 2.4 | Responses / Gemini | ✅⁴ | ✅⁴ | |
 
 Models: `gpt-6-luna`, `gemini-3.8-flash`, `claude-sonnet-5-5` unless noted. Some
@@ -522,6 +522,21 @@ harness, not the context Relay sent: OpenCode as in ¹; Kilo, an OpenCode fork, 
 kept the last context); OpenClaw only on when it crossed the budget (four compactions, all
 mid-turn); and Kimi Code's gemini-2.5-flash-lite and Kilo's gemini-3.8-flash dropped codes when
 re-summarizing a summary that held them, so the model read those files again.
+
+Checked again on 2026-10-11 with each harness's latest release (the versions above): every
+GPT row passed (Claude Code and WorkBuddy once the test image's LiteLLM started again; Gemini
+CLI, Hermes and nanobot on a second run: the model handed files to a sub-agent so the session
+compacted only once mid-turn, ended turn 2 waiting for a background sub-agent, or read files
+again after a correct compaction), and so did Claude Code on Claude. On Gemini 11 of 13
+passed, OpenCode and Kilo included (Crush on a second run, after Gemini dropped a code from a
+summary it was given); Kimi Code dropped codes as before, and Hermes again ended waiting for
+its background sub-agent. On every harness that has them, `--native-compact` (13) and
+`--harness-compaction` (14) passed; `--subagent` passed on 13 of 15 (Goose compacted only once
+mid-turn, its sub-agent reading the files; Hermes's summary dropped a code it was given). The
+hook path passed on Claude and GPT; CLM, Folding, PRO-LONG and Self-Compact passed on Codex,
+CLM on Claude Code, and Folding on OpenCode (on a second run). The coding sessions of
+`tests/docker/session.py` passed for Codex (Relay restarting before every turn; with tools;
+forked) and Claude Code (with tools; Relay dropping out for a turn; forked and rewound).
 
 Resumed sessions keep their compaction: several harnesses rewrite their history when a
 session is resumed without changing what the model reads (Codex writes absent reasoning
