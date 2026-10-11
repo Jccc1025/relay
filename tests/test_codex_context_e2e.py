@@ -461,10 +461,12 @@ class CodexContextEndToEndTests(unittest.TestCase):
         self.compare(exec_turns, turns, {"tool_calls": 4, "command": COMMAND, "script": script}, at=5, nth=2)
 
     def test_app_server_with_a_command_approved_in_the_compacting_step(self) -> None:
-        # Codex compacts with the state from before the approval; the saved prefix follows.
+        # Codex compacts with the approval in its permissions; the saved prefix's message goes.
         view, _ = self.compare(app_server_turns, [Turn("Count to six thousand.")],
                                {"tool_calls": 3, "command": COMMAND, "arguments": ESCALATE}, at=1)
-        self.assertEqual(_text(view[-1]), 'Approved command prefix saved:\n- ["seq"]')
+        text = json.dumps(view)
+        self.assertIn('approved: - [\\"seq\\"]', text)
+        self.assertNotIn("Approved command prefix saved", text)
 
     @unittest.skipUnless(shutil.which("setsid"), "setsid is not installed")
     def test_tui_with_an_agent_approvals_and_agents_md_edited_between_turns(self) -> None:

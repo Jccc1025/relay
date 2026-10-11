@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from relay.core.engine import Engine
-from relay.core.ir import Item, Kind
 from relay.harnesses import Codex, Harness
 from relay.harnesses.codex import rebuild
 from relay.prompts import SUMMARY_PREFIX
@@ -57,7 +56,9 @@ class RecordedCompactionTests(unittest.TestCase):
     def test_compacted_request_matches_codex_except_for_the_summary(self) -> None:
         codec = OpenAIResponses()
         summary = {"status": "completed", "output": [msg("assistant", "S")]}
-        for name in TRACE["cases"]:
+        # (At a turn start, the trace's Codex put its context after the summary; since 0.162 Codex
+        # puts it ahead of the last user message it keeps, as mid-turn: see test_codex_context_e2e.)
+        for name in ("mid_turn", "approved_prefixes"):
             case = TRACE["cases"][name]
             engine = Engine(Compaction(threshold=1_000, min_gain=0))
             exchange = engine.prepare(codec, Codex(), {"model": "gpt-6-sol", "input": case["request"]},
@@ -155,18 +156,6 @@ class RebuildRuleTests(unittest.TestCase):
                         "</permissions instructions>")
         history = [TOOLS, BASE, truncated, msg("user", ENV), TASK, CALL, OUTPUT, saved, CALL, OUTPUT]
         self.assertEqual(rendered(history), [without_ids([truncated])[0], msg("user", ENV)])
-
-    def test_mid_turn_updates_after_the_last_response_follow_the_compacted_history(self) -> None:
-        saved = msg("developer", 'Approved command prefix saved:\n- ["ls"]')
-        history = [*START, saved]  # written when the next step began, after Codex compacted
-        context = rebuild(history)
-        self.assertEqual(context.trailing, (len(START),))
-        self.assertEqual(rendered(history), rendered(START))
-        state = Codex().state(OpenAIResponses(), history)
-        head = (Item(Kind.USER, "fix it", ref=4), Item(Kind.SUMMARY, "S"))
-        placed = Codex().place(head, state.items, mid_turn=True)
-        self.assertEqual([(item.kind, item.ref) for item in placed][-3:],
-                         [(Kind.USER, 4), (Kind.SUMMARY, None), (Kind.SYSTEM, len(START))])
 
     def test_subagents_follow_the_agents_spawned_closed_and_resumed(self) -> None:
         def agent_call(n: int, name: str, arguments: dict[str, Any], output: dict[str, Any]) -> list[dict[str, Any]]:

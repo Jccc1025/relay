@@ -111,16 +111,13 @@ class Harness:
         chosen += [i for i in latest.values() if i not in chosen]
         return State(tuple(replace(view[i], ref=i) for i in chosen))
 
-    def place(self, head: tuple[Item, ...], state: tuple[Item, ...], mid_turn: bool) -> tuple[Item, ...]:
+    def place(self, head: tuple[Item, ...], state: tuple[Item, ...]) -> tuple[Item, ...]:
         """Put the harness's state into a compacted head (ending with its summary), the way Codex
-        does after compacting: system items first; mid-turn the context sits just above the last
-        real user message (or the summary, which stays last), and at a turn start it follows the
-        head, ahead of the new turn."""
+        (0.162) does after compacting, mid-turn and at a turn start alike: system items first, the
+        context just above the last real user message (or the summary, which stays last)."""
 
         system = tuple(item for item in state if item.kind is Kind.SYSTEM)
         context = tuple(item for item in state if item.kind is not Kind.SYSTEM)
-        if not mid_turn:
-            return (*system, *head, *context)
         last = lambda kind: next((n for n in range(len(head) - 1, -1, -1) if head[n].kind is kind), None)
         at = next(n for n in (last(Kind.USER), last(Kind.SUMMARY), len(head)) if n is not None)
         return (*system, *head[:at], *context, *head[at:])

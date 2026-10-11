@@ -143,17 +143,17 @@ class PlacementTests(unittest.TestCase):
     first, last = Item(Kind.USER, "first task", 2), Item(Kind.USER, "second task", 6)
     summary = Item(Kind.SUMMARY, "S")
 
-    def test_mid_turn_above_the_last_user_message_with_the_summary_last(self) -> None:
-        head = Harness().place((self.first, self.last, self.summary), (self.system, self.context), mid_turn=True)
+    def test_above_the_last_user_message_with_the_summary_last(self) -> None:
+        head = Harness().place((self.first, self.last, self.summary), (self.system, self.context))
         self.assertEqual(head, (self.system, self.first, self.context, self.last, self.summary))
 
-    def test_mid_turn_without_user_messages_just_above_the_summary(self) -> None:
-        head = Harness().place((self.summary,), (self.system, self.context), mid_turn=True)
+    def test_without_user_messages_just_above_the_summary(self) -> None:
+        head = Harness().place((self.summary,), (self.system, self.context))
         self.assertEqual(head, (self.system, self.context, self.summary))
 
-    def test_at_a_turn_start_after_the_summary(self) -> None:
-        head = Harness().place((self.first, self.summary), (self.system, self.context), mid_turn=False)
-        self.assertEqual(head, (self.system, self.first, self.summary, self.context))
+    def test_at_a_turn_start_above_the_last_user_message_too(self) -> None:
+        head = Harness().place((self.first, self.summary), (self.system, self.context))
+        self.assertEqual(head, (self.system, self.context, self.first, self.summary))
 
 
 class EngineStateTests(unittest.TestCase):
