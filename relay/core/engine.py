@@ -157,8 +157,11 @@ class Engine:
             try:
                 # Per-item estimates, scaled to the upstream's count of the request when there is one.
                 scale = tokens / max(1, size([*items, *volatile_items]))
+                # A window the upstream has taken a larger request of is no measure of what fits:
+                # then the history goes in one summary request, and an overflow splits it.
+                window = None if request.window and state.get("tokens", 0) > request.window else request.window
                 summarizer = _Summarizer(codec, body, lambda cut: wire[: position(cut)], leading, post,
-                                         request.window and request.window / scale, per_token)
+                                         window and window / scale, per_token)
                 if (context := self.strategy.plan(request, summarizer)) is not None:
                     answer = sendable(tuple(item for item in context.items if not _instruction(item)))
                     answered = [item.text for item in context.items if _instruction(item)]
@@ -385,9 +388,7 @@ class _Summarizer:
         while True:
             fixed = [*lead, self.codec.user_message(f"{SUMMARY_PREFIX}\n{summary}")] if summary else lead
             overhead = approx_tokens(self.codec.preamble(self.body), self.per_token) + sum(map(self._tokens, fixed))
-            # (A window that the request's fixed part alone exceeds is no measure: the harness runs
-            # with that part. Then all of it goes, and an overflow splits it.)
-            piece = _piece(self.codec, rest, budget - overhead, self._tokens) if budget and budget > overhead else len(rest)
+            piece = _piece(self.codec, rest, budget - overhead, self._tokens) if budget else len(rest)
             status, payload = self._post(self.codec.summary_request(self.body, [*fixed, *rest[:piece]], prompt))
             if self.codec.is_overflow(status, payload):
                 if piece <= _piece(self.codec, rest, 0, self._tokens):

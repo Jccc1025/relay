@@ -190,7 +190,9 @@ GROWTH = 5_000  # each file adds about 2k tokens
 # `--via hook`: the harness asks Relay before every request, and Relay's strategy compacts at this
 # size. Relay is off the model path, so a second Relay that never compacts records it, in front of
 # whatever endpoint the user's configuration names.
-HOOK_THRESHOLD = 30_000
+# Claude Code's own request is about 31.5k tokens (2.1.294): above it, room for about four files
+# between compactions (Claude Code gives up on one that refills its context within three turns).
+HOOK_THRESHOLD = 42_000
 # `--strategy clm`: the model edits its own context through a mirror file; this budget is below what
 # the task needs unedited (its reminders and readout are what make the model edit).
 CLM_BUDGET = 26_000
