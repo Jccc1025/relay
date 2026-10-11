@@ -15,7 +15,7 @@ request adds only what is new as the next `context_k`, and the work on earlier o
 `history_k` and in the variables the model kept, so a request reads what changed rather than the
 whole conversation again. Without it (`rlm`), as the authors run a fresh query, every request
 works over the whole conversation. The `local` environment runs the model's code in Relay's
-process; `RELAY_RLM_ENVIRONMENT=docker` uses the authors' Docker environment instead.
+process; the `rlm_environment` setting `docker` uses the authors' Docker environment instead.
 """
 
 from __future__ import annotations
@@ -23,13 +23,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..core.ir import LABELS, Context, Item, Kind, Request
 from .base import Summarizer
+from .. import settings
 
 PROMPT = """Work out the next step of the coding agent whose conversation is in `context`: a list of messages, oldest first (the user's requests, the agent's replies, its tool calls and their results). Submit through `answer` an instruction for the model that takes the step, which has the agent's instructions and tools but not this conversation, so make it self-contained: either exactly one next action (the tool to use and its arguments: the command to run, the file to read or change, with exact paths and content) or, if the task is done, the exact final reply to the user. Keep paths, identifiers, values and the user's constraints exactly as they are."""
 PERSISTENT = """
@@ -53,10 +53,10 @@ class RLM:
     sessions: OrderedDict = field(default_factory=OrderedDict, compare=False, repr=False)  # persistent: by conversation
 
     @classmethod
-    def from_env(cls) -> RLM:
-        return cls(max_depth=int(os.getenv("RELAY_RLM_MAX_DEPTH", "1")),
-                   max_iterations=int(os.getenv("RELAY_RLM_MAX_ITERATIONS", "30")),
-                   environment=os.getenv("RELAY_RLM_ENVIRONMENT", "local"))
+    def from_settings(cls) -> RLM:
+        return cls(max_depth=int(settings.value("rlm_max_depth", "1")),
+                   max_iterations=int(settings.value("rlm_max_iterations", "30")),
+                   environment=settings.value("rlm_environment", "local"))
 
     def fingerprint(self) -> dict[str, Any]:
         return {"name": self.name, "persistent": self.persistent, "max_depth": self.max_depth,

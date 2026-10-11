@@ -11,7 +11,7 @@ from unittest.mock import patch
 from relay import install
 from relay.harnesses import HARNESSES
 from relay.install import Setting
-from relay.providers import route, upstreams_from_env
+from relay.providers import route, upstreams_from_settings
 
 
 class InstallTests(unittest.TestCase):
@@ -45,14 +45,15 @@ class InstallTests(unittest.TestCase):
         self.assertIn("OPENAI_HOST: http://127.0.0.1:8787/up/h-2\n", (self.root / "c.yaml").read_text())
         self.assertIn("GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787/up/h-3", (self.root / "d.env").read_text())
         self.assertEqual(install.mounts()["/up/h-1"], "https://api.kimi.com")
-        upstream = route("/up/h-0/anthropic/v1/messages", {}, upstreams_from_env())
+        upstream = route("/up/h-0/anthropic/v1/messages", {}, upstreams_from_settings())
         self.assertEqual(upstream.url("/up/h-0/anthropic/v1/messages"), "https://gateway.example/anthropic/v1/messages")
 
         install.uninstall("h")
         for name, text in files.items():
             self.assertEqual((self.root / name).read_text().strip(), text.strip() if name != "a.json"
                              else json.dumps(json.loads(text), indent=2))
-        self.assertEqual(install.mounts(), {})
+        # A conversation the harness started through Relay goes on through it: Relay still forwards.
+        self.assertEqual(install.mounts()["/up/h-1"], "https://api.kimi.com")
 
     def test_harness_auto_compaction_is_turned_off_and_restored(self) -> None:
         """Relay compacts instead: each harness's own trigger is switched off (or set beyond reach)

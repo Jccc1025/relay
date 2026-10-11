@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import functools
 import json
-import os
 import re
 import tomllib
 from collections.abc import Callable
@@ -19,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+from .settings import home
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,7 @@ class Setting:
 
 
 def state_file() -> Path:
-    return Path(os.getenv("RELAY_HOME", "~/.config/relay")).expanduser() / "installed.json"
+    return home() / "installed.json"
 
 
 def install(name: str, relay_url: str, settings: list[Setting]) -> None:
@@ -53,6 +54,15 @@ def install(name: str, relay_url: str, settings: list[Setting]) -> None:
         records.append(record)
     state[name] = records
     _save(state)
+    kept = home() / "mounts.json"  # (kept through `relay uninstall`)
+    known = json.loads(kept.read_text()) if kept.exists() else {}
+    kept.write_text(json.dumps({**known, **{r["mount"]: r["origin"] for r in records if "mount" in r}}, indent=2))
+
+
+def installed() -> list[str]:
+    """The harnesses `relay install` has set up."""
+
+    return sorted(_load())
 
 
 def uninstall(name: str) -> list[Path]:
@@ -67,18 +77,22 @@ def uninstall(name: str) -> list[Path]:
 
 
 def mounts() -> dict[str, str]:
-    """Installed mounts, e.g. {"/up/codex-0": "https://chatgpt.com"}."""
+    """Where Relay forwards, e.g. {"/up/codex-0": "https://chatgpt.com"}: every mount installed,
+    uninstalled ones too, as a conversation the harness started through Relay goes on through it."""
 
-    path = state_file()
-    if not path.exists():
-        return {}
-    stat = path.stat()
-    return _mounts(path, (stat.st_mtime_ns, stat.st_size))
+    found: dict[str, str] = {}
+    for path in (home() / "mounts.json", state_file()):  # (the installed ones last: they are current)
+        if path.exists():
+            stat = path.stat()
+            found.update(_mounts(path, (stat.st_mtime_ns, stat.st_size)))
+    return found
 
 
-@functools.lru_cache(maxsize=4)
+@functools.lru_cache(maxsize=8)
 def _mounts(path: Path, stamp: tuple[int, int]) -> dict[str, str]:
     state = json.loads(path.read_text())
+    if path.name == "mounts.json":
+        return state
     return {r["mount"]: r["origin"] for records in state.values() for r in records if "mount" in r}
 
 

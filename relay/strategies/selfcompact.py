@@ -73,7 +73,7 @@ class SelfCompact:
     name: str = "selfcompact"
 
     @classmethod
-    def from_env(cls) -> SelfCompact:
+    def from_settings(cls) -> SelfCompact:
         return cls()
 
     def fingerprint(self) -> dict[str, Any]:

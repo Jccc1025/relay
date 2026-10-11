@@ -14,7 +14,6 @@ overhead cannot trigger a summary on every request.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +21,7 @@ from ..core.ir import AGENT_KINDS, Context, Item, Kind, Request
 from ..core.tokens import approx_tokens, truncate_middle
 from ..prompts import SUMMARIZATION_PROMPT, SUMMARY_PREFIX
 from .base import Summarizer
+from .. import settings
 
 DEFAULT_WINDOW = 128_000
 HARD_LIMIT = 0.95  # Codex's effective_context_window_percent
@@ -49,14 +49,14 @@ class Compaction:
             raise ValueError("min_gain must be in [0, 1)")
 
     @classmethod
-    def from_env(cls) -> Compaction:
-        threshold, growth = os.getenv("RELAY_COMPACT_THRESHOLD"), os.getenv("RELAY_COMPACT_GROWTH")
+    def from_settings(cls) -> Compaction:
+        threshold, growth = settings.value("compact_threshold"), settings.value("compact_growth")
         return cls(
             threshold=int(threshold) if threshold else None,
             growth=int(growth) if growth else None,
-            ratio=float(os.getenv("RELAY_COMPACT_RATIO", "0.9")),
-            retain_user_tokens=int(os.getenv("RELAY_RETAIN_USER_TOKENS", "20000")),
-            min_gain=float(os.getenv("RELAY_COMPACT_MIN_GAIN", "0.1")),
+            ratio=float(settings.value("compact_ratio", "0.9")),
+            retain_user_tokens=int(settings.value("retain_user_tokens", "20000")),
+            min_gain=float(settings.value("compact_min_gain", "0.1")),
         )
 
     def fingerprint(self) -> dict[str, Any]:

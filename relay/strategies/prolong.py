@@ -14,7 +14,6 @@ what the model sees; PRO-LONG adds the skill to it and keeps the log.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +22,7 @@ from typing import Any
 from ..core.ir import Context, Item, Kind, Request
 from .base import Strategy, Summarizer
 from .compaction import Compaction
+from .. import settings
 
 # PRO-LONG's skill (templates/prolong/SKILL.md), with the log's path.
 SKILL = """## PRO-LONG memory
@@ -62,8 +62,8 @@ class ProLong:
     name: str = "prolong"
 
     @classmethod
-    def from_env(cls) -> ProLong:
-        return cls(Compaction.from_env(), os.getenv("RELAY_PROLONG_LOG", "/tmp/.prolong/log.jsonl"))
+    def from_settings(cls) -> ProLong:
+        return cls(Compaction.from_settings(), settings.value("prolong_log", "/tmp/.prolong/log.jsonl"))
 
     def fingerprint(self) -> dict[str, Any]:
         return {"name": self.name, "inner": self.inner.fingerprint(), "log": self.log, "skill": SKILL}

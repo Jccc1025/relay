@@ -29,7 +29,7 @@ class MEM1:
     name: str = "mem1"
 
     @classmethod
-    def from_env(cls) -> MEM1:
+    def from_settings(cls) -> MEM1:
         return cls()
 
     def fingerprint(self) -> dict[str, Any]:

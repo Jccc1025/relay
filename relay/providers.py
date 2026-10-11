@@ -7,11 +7,11 @@ Anthropic, OpenRouter and many hosted models serve the Messages API.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .install import mounts
+from . import settings
 
 # Not forwarded: hop-by-hop headers, and accept-encoding so that Relay always reads
 # (and returns) an uncompressed body.
@@ -86,23 +86,23 @@ def route(path: str, headers: Mapping[str, str], upstreams: Mapping[str, Upstrea
     return upstreams["openai"]
 
 
-def upstreams_from_env() -> dict[str, Upstream]:
-    anthropic_url = os.getenv("RELAY_ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+def upstreams_from_settings() -> dict[str, Upstream]:
+    anthropic_url = settings.value("anthropic_base_url", "https://api.anthropic.com")
     return {
         "openai": Upstream(
-            os.getenv("RELAY_OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            settings.value("openai_base_url", "https://api.openai.com/v1"),
             "/v1",
-            os.getenv("RELAY_OPENAI_API_KEY") or None,
+            settings.value("openai_api_key") or None,
         ),
         "chatgpt": Upstream(  # Codex signed in with ChatGPT
-            os.getenv("RELAY_CHATGPT_BASE_URL", "https://chatgpt.com/backend-api/codex"),
+            settings.value("chatgpt_base_url", "https://chatgpt.com/backend-api/codex"),
             "/backend-api/codex",
         ),
-        "gemini": Upstream(os.getenv("RELAY_GEMINI_BASE_URL", "https://generativelanguage.googleapis.com")),
+        "gemini": Upstream(settings.value("gemini_base_url", "https://generativelanguage.googleapis.com")),
         "anthropic": Upstream(
             anthropic_url,
             "",
-            os.getenv("RELAY_ANTHROPIC_API_KEY") or None,
+            settings.value("anthropic_api_key") or None,
             "x-api-key" if "api.anthropic.com" in anthropic_url else "authorization",
         ),
     }

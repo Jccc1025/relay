@@ -60,7 +60,7 @@ class ContextFolding:
     name: str = "folding"
 
     @classmethod
-    def from_env(cls) -> ContextFolding:
+    def from_settings(cls) -> ContextFolding:
         return cls()
 
     def fingerprint(self) -> dict[str, Any]:

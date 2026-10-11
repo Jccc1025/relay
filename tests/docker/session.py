@@ -223,7 +223,7 @@ def run(name: str, repo: Path, window: int, transition: str | None = None, tools
     if tools:
         (home / "tickets.py").write_text(TICKETS)
         (project / "mockup.png").write_bytes(square_png())
-    env = {f"PROMPT{n}": text for n, text in enumerate(prompts, start=1)} | {"RELAY_CONTEXT_WINDOW": str(window),
+    env = {f"PROMPT{n}": text for n, text in enumerate(prompts, start=1)} | {"context_window": str(window),
                                                                            "FORK": FORK, "REWIND": REWIND}
     turns = [f"""{MCP[harness] if tools else ""}
         {HARNESS_COMPACT[harness].format(limit=harness_compact) if harness_compact else ""}

@@ -98,8 +98,11 @@ class RelayRunTests(unittest.TestCase):
         with serve(fake.app) as upstream, tempfile.TemporaryDirectory() as root:
             home, work = Path(root, "home"), Path(root, "work")
             home.mkdir(), work.mkdir()
-            env = {**_env(home), "RELAY_OPENAI_BASE_URL": f"{upstream}/v1",
-                   "RELAY_ANTHROPIC_BASE_URL": upstream, "OPENAI_API_KEY": "k", "ANTHROPIC_API_KEY": "k"}
+            relay_home = Path(root, "relay")  # Relay's settings: its upstreams are the fake
+            relay_home.mkdir()
+            (relay_home / "settings.json").write_text(json.dumps({"openai_base_url": f"{upstream}/v1",
+                                                                  "anthropic_base_url": upstream}))
+            env = {**_env(home), "RELAY_HOME": str(relay_home), "OPENAI_API_KEY": "k", "ANTHROPIC_API_KEY": "k"}
             result = subprocess.run([sys.executable, "-m", "relay.cli", "run", harness, "--", *args],
                                     cwd=work, env=env, stdin=subprocess.DEVNULL,
                                     capture_output=True, text=True, timeout=180)

@@ -209,8 +209,10 @@ def listening(port: int, log: str) -> str:
 
 RECORDER = f"""UPSTREAM=$(python3 -c 'import json, pathlib; p = pathlib.Path("~/.claude/settings.json").expanduser()
 print((json.loads(p.read_text()) if p.exists() else {{}}).get("env", {{}}).get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"))')
-(cd /relay && RELAY_PORT=8788 RELAY_STRATEGY=compaction RELAY_COMPACT_GROWTH=1000000000 RELAY_HARNESS=claude_code RELAY_ANTHROPIC_BASE_URL=$UPSTREAM \
-  python3 -m relay.cli serve > ~/recorder.log 2>&1 &)
+mkdir -p ~/.recorder && python3 -c 'import json, sys; json.dump({{"port": 8788, "strategy": "compaction", "compact_growth": 10**9,
+"harness": "claude_code", "anthropic_base_url": sys.argv[1], "cache_path": "off", "trace": "/home/agent/trace.jsonl"}},
+open(sys.argv[2], "w"))' "$UPSTREAM" ~/.recorder/settings.json
+(cd /relay && RELAY_HOME=~/.recorder python3 -m relay.cli serve > ~/recorder.log 2>&1 &)
 {listening(8788, "~/recorder.log")}
 {JSON_MERGE.format("~/.claude/settings.json", "env.ANTHROPIC_BASE_URL", '"http://127.0.0.1:8788"')}"""
 
@@ -489,26 +491,26 @@ def run(name: str, growth: int | None = None, retried: bool = False, probe: bool
         first, second = RLM_PROMPTS if spec.resume else (RLM_TASK, "")
     # Growth (every GROWTH new tokens) by default; `window` instead uses Relay's own trigger,
     # 90% of a context window of that many tokens (and 95% always).
-    trigger = {"RELAY_CONTEXT_WINDOW": str(window)} if window else {
-        "RELAY_COMPACT_GROWTH": str(10**9 if probe or selfcompact else growth or GROWTH)}
+    trigger = {"context_window": str(window)} if window else {
+        "compact_growth": str(10**9 if probe or selfcompact else growth or GROWTH)}
     if via == "hook":
-        trigger = {"RELAY_COMPACT_THRESHOLD": str(HOOK_THRESHOLDS[name.split(":")[1]])}
+        trigger = {"compact_threshold": str(HOOK_THRESHOLDS[name.split(":")[1]])}
     if strategy == "folding":
-        trigger = {"RELAY_STRATEGY": "folding"}
+        trigger = {"strategy": "folding"}
     if strategy == "prolong":  # compaction inside, as usual, and the log where the harness's tools reach it
-        trigger |= {"RELAY_STRATEGY": "prolong", "RELAY_PROLONG_LOG": "/project/.prolong/log.jsonl"}
+        trigger |= {"strategy": "prolong", "prolong_log": "/project/.prolong/log.jsonl"}
     if strategy in ("selfcompact", "autocompact", "acm", "mem1", "rlm", "rlm_persistent"):  # (AutoCompact's fallback: 90% of the window)
-        trigger = {"RELAY_STRATEGY": strategy, "RELAY_ACM_DIR": "/project/.acm"}
-        trigger |= {"RELAY_CONTEXT_WINDOW": str(window or BASELINE_WINDOW)} if strategy == "selfcompact" else {}
+        trigger = {"strategy": strategy, "acm_dir": "/project/.acm"}
+        trigger |= {"context_window": str(window or BASELINE_WINDOW)} if strategy == "selfcompact" else {}
     if strategy == "clm":  # the files in HOME, where the run can be inspected
-        trigger = {"RELAY_STRATEGY": "clm", "RELAY_CLM_BUDGET": str(CLM_BUDGETS.get(harness, CLM_BUDGET)),
-                   "RELAY_CLM_DIR": "/project/.live_ctx"}
+        trigger = {"strategy": "clm", "clm_budget": str(CLM_BUDGETS.get(harness, CLM_BUDGET)),
+                   "clm_dir": "/project/.live_ctx"}
         if clm_edit:  # no budget pressure: the edit is the task
-            trigger = {k: v for k, v in trigger.items() if k != "RELAY_CLM_BUDGET"} | {"RELAY_CLM_NUDGES": "off"}
+            trigger = {k: v for k, v in trigger.items() if k != "clm_budget"} | {"clm_nudges": "off"}
         if steering:
-            trigger |= {"RELAY_CLM_STEERING": f"/relay/tests/docker/steering/{steering}.md",
-                        "RELAY_CLM_NUDGES": "on" if POLICIES[steering].nudges else "off"}
-    env = {"PROMPT": first, "PROMPT2": second, **trigger, "RELAY_COMPACT_MIN_GAIN": "0"}
+            trigger |= {"clm_steering": f"/relay/tests/docker/steering/{steering}.md",
+                        "clm_nudges": "on" if POLICIES[steering].nudges else "off"}
+    env = {"PROMPT": first, "PROMPT2": second, **trigger, "compact_min_gain": "0"}
     turn = 1800 if strategy.startswith("rlm") else 600  # an RLM works out every step before the model takes it
     container(name, root, env, f"""
         cd /project && timeout {turn} {spec.command} > ~/harness.out 2> ~/harness.err < /dev/null
@@ -540,15 +542,16 @@ def run(name: str, growth: int | None = None, retried: bool = False, probe: bool
 
 
 def container(name: str, root: Path, env: dict[str, str], turns: str, timeout: int = 1500, install: bool = True,
-              setup: str = "", via: str = "proxy") -> None:
+              setup: str = "", via: str = "proxy", serve: bool = True) -> None:
     """Run `turns` (shell) on a user's machine, in the image: HOME is root/home and /project is
     root/project; the harness is configured as the user had it (`Spec.setup`), Relay serves (its
     process id in ~/relay.pid) and, unless `install` is false, `relay install` points the
-    harness at it. Relay's events and trace land in HOME."""
+    harness at it (`serve` false: nothing of Relay's runs until the turns start it). Relay's events
+    and trace land in HOME."""
 
     spec, harness = SPECS[name], name.split(":")[0]
     home, project = root / "home", root / "project"
-    env = {**env, "RELAY_EVENT_LOG": "/home/agent/events.jsonl", "RELAY_TRACE": "/home/agent/trace.jsonl",
+    env = {**env, "event_log": "/home/agent/events.jsonl", "trace": "/home/agent/trace.jsonl",
            # A copied Claude login would load the account's claude.ai connectors (its mail, its
            # documents) as a hundred more tools: never in a test.
            "ENABLE_CLAUDEAI_MCP_SERVERS": "0"}
@@ -570,11 +573,15 @@ def container(name: str, root: Path, env: dict[str, str], turns: str, timeout: i
         env["PATH"] = "/opt/codex/bin:/opt/codex/codex-path:/usr/local/bin:/usr/bin:/bin"
     if harness == "claude_code":
         mounts.append(f"{Path(shutil.which('claude')).resolve()}:/usr/local/bin/claude:ro")
+    # Relay's settings (lowercase names) go in its settings file, as `relay set` writes them.
+    (home / ".config/relay").mkdir(parents=True, exist_ok=True)
+    (home / ".config/relay/settings.json").write_text(json.dumps({k: v for k, v in env.items() if k.islower()}))
+    env = {k: v for k, v in env.items() if not k.islower()}
 
     script = f"""
         cd /relay
-        python3 -m relay.cli serve > ~/relay.log 2>&1 & echo $! > ~/relay.pid
-        {listening(8787, "~/relay.log")}
+        {f'python3 -m relay.cli serve > ~/relay.log 2>&1 & echo $! > ~/relay.pid' if serve else ""}
+        {listening(8787, "~/relay.log") if serve else ""}
         cd ~ && {spec.setup}
         {setup}
         {f"cd /relay && python3 -m relay.cli install {harness} --via {via} >> ~/relay.log 2>&1" if install else ""}
