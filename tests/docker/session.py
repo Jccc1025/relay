@@ -28,7 +28,7 @@ import tempfile
 import zlib
 from pathlib import Path
 
-from check import SPECS, container, self_compactions
+from check import SPECS, container, listening, self_compactions
 
 TURNS = [
     "I just cloned this repo (more-itertools) and I'm new to it. Give me a short tour: how the package is "
@@ -152,7 +152,7 @@ RELAY = {
     "restart": f"""kill $(cat ~/relay.pid) && while {PORT_OPEN}; do sleep 0.2; done
         cd /relay
         python3 -m relay.cli serve >> ~/relay.log 2>&1 & echo $! > ~/relay.pid
-        until {PORT_OPEN}; do sleep 0.2; done""",
+        {listening(8787, "~/relay.log")}""",
 }
 TRANSITIONS = {
     "late-join": {3: "install"},  # turns 1 and 2 talk to the provider directly
@@ -234,7 +234,7 @@ def run(name: str, repo: Path, window: int, transition: str | None = None, tools
         if branch and n == 4:
             turns.append(f"""export PROMPT="$FORK" && cd /project && timeout 600 {fork} > ~/fork.out 2> ~/fork.err < /dev/null
         {f'{TURN2_END} && export PROMPT="$REWIND" && timeout 600 {rewind} > ~/rewind.out 2> ~/rewind.err < /dev/null' if rewind else ""}""")
-        turns.append(f"""{RELAY[relay[n]].format(harness=harness) if n in relay else ""}
+        turns.append(f"""{RELAY[relay[n]].replace("{harness}", harness) if n in relay else ""}
         {f"printf '%s' '{RULE}' | tee -a {' '.join('/project/' + file for file in FILES)} > /dev/null" if n == 3 else ""}
         export PROMPT="$PROMPT{n}" && start=$(date +%s)
         cd /project && timeout 900 {command} > ~/turn{n}.out 2> ~/turn{n}.err < /dev/null

@@ -128,6 +128,14 @@ class EngineTests(unittest.TestCase):
             self.assertLessEqual(sum(approx_tokens(CODEC.classify(i).text) for i in request["input"][:-1]), 950)
         self.assertIn(f"S{len(upstream.requests)}", json.dumps(exchange.body))
 
+    def test_a_window_the_upstream_took_more_than_does_not_split_the_history(self) -> None:
+        engine = Engine(Compaction(threshold=300, min_gain=0), window=1_000)  # 950 per summary request
+        history = [msg("user", "task"), *(item for i in range(16) for item in step(i))]
+        engine.record(engine.prepare(CODEC, HARNESS, body(*history[:3]), tenant="t", post=Upstream()), 2_000)
+        upstream = Upstream()
+        self.assertTrue(engine.prepare(CODEC, HARNESS, body(*history), tenant="t", post=upstream).compacted)
+        self.assertEqual(len(upstream.requests), 1)  # (the window would have split it in pieces)
+
     def test_a_history_the_upstream_counts_as_fitting_is_summarized_in_one_request(self) -> None:
         history = [msg("user", "task"), *(item for i in range(3) for item in step(i, size=1_500))]  # ~1,130 estimated
         unmeasured, measured = Upstream(), Upstream()
@@ -295,6 +303,16 @@ class SummaryRetryTests(unittest.TestCase):
         with unittest.mock.patch("relay.core.engine.time.sleep"), self.assertLogs("relay", "WARNING"):
             exchange = engine.prepare(CODEC, HARNESS, request, tenant="t", post=Upstream(*[cut_short] * 6))
         self.assertIs(exchange.body, request)  # gave up: forwarded unchanged
+
+    def test_empty_summaries_are_retried(self) -> None:
+        empty = (200, {"status": "completed", "output": []})  # the model ended its turn at once
+        engine = Engine(Compaction(threshold=300, min_gain=0))
+        upstream = Upstream(empty)
+        with unittest.mock.patch("relay.core.engine.time.sleep"):
+            exchange = engine.prepare(CODEC, HARNESS, body(msg("user", "task"), *step(1), *step(2)),
+                                      tenant="t", post=upstream)
+        self.assertTrue(exchange.compacted)
+        self.assertEqual(len(upstream.requests), 2)
 
 
 class UnreportedUsageTests(unittest.TestCase):

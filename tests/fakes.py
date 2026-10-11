@@ -76,10 +76,12 @@ class FakeUpstream:
         """("summary", text) | ("tool", None) | ("final", text) for normalized turns, and the
         number of tool results in the current user turn."""
 
-        summarizing = bool(turns) and COMPACTION_MARKER in turns[-1][1]
+        # (Claude Code's system messages, such as `<total_tokens>`, may follow the prompt.)
+        asked = next((n for n in range(len(turns) - 1, -1, -1) if turns[n][0] != "system"), None)
+        summarizing = asked is not None and COMPACTION_MARKER in turns[asked][1]
         if summarizing and self.fail_summaries:
             return "error", None, 0
-        steps = _steps(turns[:-1] if summarizing else turns)
+        steps = _steps(turns[:asked] if summarizing else turns)
         if summarizing:
             return "summary", f"FAKE SUMMARY: {steps} tool results so far.", steps
         if steps >= self.tool_calls:

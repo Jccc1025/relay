@@ -157,8 +157,11 @@ class Engine:
             try:
                 # Per-item estimates, scaled to the upstream's count of the request when there is one.
                 scale = tokens / max(1, size([*items, *volatile_items]))
+                # A window the upstream has taken a larger request of is no measure of what fits:
+                # then the history goes in one summary request, and an overflow splits it.
+                window = None if request.window and state.get("tokens", 0) > request.window else request.window
                 summarizer = _Summarizer(codec, body, lambda cut: wire[: position(cut)], leading, post,
-                                         request.window and request.window / scale, per_token)
+                                         window and window / scale, per_token)
                 if (context := self.strategy.plan(request, summarizer)) is not None:
                     answer = sendable(tuple(item for item in context.items if not _instruction(item)))
                     answered = [item.text for item in context.items if _instruction(item)]
@@ -411,13 +414,15 @@ class _Summarizer:
         return self.codec.output_text(payload)
 
     def _post(self, request: Body) -> tuple[int, Any]:
-        """One request of Relay's own, retried while rate limited, overloaded or cut short."""
+        """One request of Relay's own, retried while rate limited, overloaded, cut short or empty
+        (a model may end its turn at once, without a word)."""
 
         attempt = 0
         while True:
             self.requests += 1
             status, payload = self.post(request)
-            incomplete = status < 300 and not (isinstance(payload, dict) and self.codec.finished(payload))
+            answered = isinstance(payload, dict) and self.codec.finished(payload) and self.codec.output_text(payload)
+            incomplete = status < 300 and not answered
             if not (incomplete or status in TRANSIENT) or attempt == RETRIES:
                 return status, payload
             attempt += 1

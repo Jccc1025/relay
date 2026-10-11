@@ -140,13 +140,14 @@ class AnthropicMessages:
         return system + json.dumps(body.get("tools") or [], ensure_ascii=False)
 
     def summary_request(self, body: Body, items: list[WireItem], prompt: str) -> Body:
-        while items and items[-1].get("role") == "system":  # may not precede a user turn
-            items = items[:-1]
+        trailing = []  # a system message may not precede a user turn, but may end the request
+        while items and items[-1].get("role") == "system":
+            items, trailing = items[:-1], [items[-1], *trailing]
         thinking = body.get("thinking") if isinstance(body.get("thinking"), dict) else {}
         cap = SUMMARY_MAX_TOKENS + int(thinking.get("budget_tokens") or 0)
         request = {key: value for key, value in body.items() if key != "stream"}
         request.update(
-            messages=[*items, self.user_message(prompt)],
+            messages=[*items, self.user_message(prompt), *trailing],
             stream=False,
             max_tokens=min(int(body.get("max_tokens") or cap), cap),
         )

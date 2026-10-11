@@ -22,8 +22,7 @@ added to the context, so a run compacts mid-turn and at the start of a turn, sev
 
 Checks, for every compaction: the summary contains every code read so far (information
 survives repeated compaction); the new context has Codex's layout (system, recent user
-messages verbatim, the initial context above the last user message and the summary last
-mid-turn, or re-injected after the summary at a turn start) and keeps all of the initial
+messages verbatim, the initial context above the last user message, the summary last) and keeps all of the initial
 context; and every later request of the conversation that Relay forwarded carries exactly
 the latest summary and none of the summarized tool output. Also: no file was read twice, both answers list the right codes in
 order, no compaction failed, and the upstream accepted every model call.
@@ -151,7 +150,9 @@ EARLY = {
     "openclaw": JSON_MERGE.format("~/.openclaw/openclaw.json", "models.providers.openai.models",
                                   '[{"id": "gpt-6-luna", "name": "gpt-6-luna", "contextWindow": 32000, "maxTokens": 8000}]'),
     "kimi_code": "sed -i 's/^max_context_size = 200000/max_context_size = 30000/' ~/.kimi-code/config.toml",
-    "hermes": "sed -i 's/^model:/model:\\n  context_length: 30000/' ~/.hermes/config.yaml",
+    # (Hermes refuses a context window under 64k: it compresses at 30% of one, about 19k tokens)
+    "hermes": "sed -i 's/^model:/model:\\n  context_length: 64000/' ~/.hermes/config.yaml && "
+              "printf 'compression:\\n  enabled: true\\n  threshold: 0.3\\n' >> ~/.hermes/config.yaml",
     "nanobot": JSON_MERGE.format("~/.nanobot/config.json", "agents.defaults.contextWindowTokens", "30000"),
     "deepseek_harness": "printf -- '- id: compaction-basic\\n  config:\\n    thresholdRatio: 0.06\\n    retainRatio: 0.02\\n' "
                         ">> ~/.dsh/cordis.patch.yml",
@@ -165,7 +166,8 @@ COMPACT_ASK = re.compile(r"structured summary|<conversation>|summary of our conv
 
 # `--native-compact`: the harness compacts its own history between the turns, as a user would,
 # with this command sent through its own continue/resume.
-NATIVE_COMPACT = {"claude_code": "/compact", "codex": "/compact", "gemini_cli": "/compress", "pi": "/compact",
+# (Not Gemini CLI: since 0.63 its headless mode hands `/compress` to the model as a question.)
+NATIVE_COMPACT = {"claude_code": "/compact", "codex": "/compact", "pi": "/compact",
                   "opencode": "/compact", "kilo": "/compact", "crush": "/compact", "openclaw": "/compact",
                   "goose": "/compact", "kimi_code": "/compact", "hermes": "/compress", "nanobot": "/compact",
                   "deepseek_harness": "/compact", "workbuddy": "/compact"}
@@ -188,15 +190,28 @@ GROWTH = 5_000  # each file adds about 2k tokens
 # `--via hook`: the harness asks Relay before every request, and Relay's strategy compacts at this
 # size. Relay is off the model path, so a second Relay that never compacts records it, in front of
 # whatever endpoint the user's configuration names.
-HOOK_THRESHOLD = 30_000
+# Claude Code's own request is about 31.5k tokens on Claude, 17k on GPT (2.1.294), turn 2's note 6k
+# more: above them, room for about four files after a compaction (Claude Code gives up on one that
+# refills its context within three turns).
+HOOK_THRESHOLDS = {"claude": 50_000, "login": 50_000, "gpt": 34_000}
 # `--strategy clm`: the model edits its own context through a mirror file; this budget is below what
 # the task needs unedited (its reminders and readout are what make the model edit).
 CLM_BUDGET = 26_000
+# (Claude Code's own request is about 31.5k: below that the model cannot edit its way under any budget.)
+CLM_BUDGETS = {"claude_code": 45_000}
+
+def listening(port: int, log: str) -> str:
+    """Shell that waits up to two minutes for a server on `port`, else shows its log and fails."""
+
+    up = f"(: </dev/tcp/127.0.0.1/{port}) 2>/dev/null"
+    return f"for _ in $(seq 600); do {up} && break; sleep 0.2; done; {up} || {{ tail -20 {log}; exit 1; }}"
+
+
 RECORDER = f"""UPSTREAM=$(python3 -c 'import json, pathlib; p = pathlib.Path("~/.claude/settings.json").expanduser()
 print((json.loads(p.read_text()) if p.exists() else {{}}).get("env", {{}}).get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"))')
 (cd /relay && RELAY_PORT=8788 RELAY_STRATEGY=compaction RELAY_COMPACT_GROWTH=1000000000 RELAY_HARNESS=claude_code RELAY_ANTHROPIC_BASE_URL=$UPSTREAM \
   python3 -m relay.cli serve > ~/recorder.log 2>&1 &)
-until python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8788))' 2>/dev/null; do sleep 0.2; done
+{listening(8788, "~/recorder.log")}
 {JSON_MERGE.format("~/.claude/settings.json", "env.ANTHROPIC_BASE_URL", '"http://127.0.0.1:8788"')}"""
 
 
@@ -314,10 +329,13 @@ LITELLM = f"""cat > ~/litellm.yaml <<'YAML'
 model_list:
   - model_name: {GPT}
     litellm_params: {{model: openai/{GPT}, api_key: os.environ/OPENAI_API_KEY}}
+  - model_name: "*"  # the harness's own helper models (Gemini CLI's `/compress`) get the same one
+    litellm_params: {{model: openai/{GPT}, api_key: os.environ/OPENAI_API_KEY}}
 litellm_settings: {{drop_params: true}}
+general_settings: {{dangerously_permit_weak_or_unset_master_key: true}}  # it listens on 127.0.0.1 in the container
 YAML
 litellm --config ~/litellm.yaml --port 4000 > ~/litellm.log 2>&1 &
-until python3 -c 'import socket; socket.create_connection(("127.0.0.1", 4000))' 2>/dev/null; do sleep 0.5; done"""
+{listening(4000, "~/litellm.log")}"""
 # The user already routes the harness through LiteLLM, which translates its protocol to
 # OpenAI; `relay install` then wraps that gateway.
 
@@ -474,7 +492,7 @@ def run(name: str, growth: int | None = None, retried: bool = False, probe: bool
     trigger = {"RELAY_CONTEXT_WINDOW": str(window)} if window else {
         "RELAY_COMPACT_GROWTH": str(10**9 if probe or selfcompact else growth or GROWTH)}
     if via == "hook":
-        trigger = {"RELAY_COMPACT_THRESHOLD": str(HOOK_THRESHOLD)}
+        trigger = {"RELAY_COMPACT_THRESHOLD": str(HOOK_THRESHOLDS[name.split(":")[1]])}
     if strategy == "folding":
         trigger = {"RELAY_STRATEGY": "folding"}
     if strategy == "prolong":  # compaction inside, as usual, and the log where the harness's tools reach it
@@ -483,7 +501,8 @@ def run(name: str, growth: int | None = None, retried: bool = False, probe: bool
         trigger = {"RELAY_STRATEGY": strategy, "RELAY_ACM_DIR": "/project/.acm"}
         trigger |= {"RELAY_CONTEXT_WINDOW": str(window or BASELINE_WINDOW)} if strategy == "selfcompact" else {}
     if strategy == "clm":  # the files in HOME, where the run can be inspected
-        trigger = {"RELAY_STRATEGY": "clm", "RELAY_CLM_BUDGET": str(CLM_BUDGET), "RELAY_CLM_DIR": "/project/.live_ctx"}
+        trigger = {"RELAY_STRATEGY": "clm", "RELAY_CLM_BUDGET": str(CLM_BUDGETS.get(harness, CLM_BUDGET)),
+                   "RELAY_CLM_DIR": "/project/.live_ctx"}
         if clm_edit:  # no budget pressure: the edit is the task
             trigger = {k: v for k, v in trigger.items() if k != "RELAY_CLM_BUDGET"} | {"RELAY_CLM_NUDGES": "off"}
         if steering:
@@ -529,7 +548,10 @@ def container(name: str, root: Path, env: dict[str, str], turns: str, timeout: i
 
     spec, harness = SPECS[name], name.split(":")[0]
     home, project = root / "home", root / "project"
-    env = {**env, "RELAY_EVENT_LOG": "/home/agent/events.jsonl", "RELAY_TRACE": "/home/agent/trace.jsonl"}
+    env = {**env, "RELAY_EVENT_LOG": "/home/agent/events.jsonl", "RELAY_TRACE": "/home/agent/trace.jsonl",
+           # A copied Claude login would load the account's claude.ai connectors (its mail, its
+           # documents) as a hundred more tools: never in a test.
+           "ENABLE_CLAUDEAI_MCP_SERVERS": "0"}
     passwd = root / "passwd"  # some harnesses look the user up (os.userInfo)
     passwd.write_text(f"root:x:0:0::/root:/bin/bash\nagent:x:{os.getuid()}:{os.getgid()}::/home/agent:/bin/bash\n")
     mounts = [f"{REPO}:/relay:ro", f"{home}:/home/agent", f"{project}:/project", f"{passwd}:/etc/passwd:ro"]
@@ -552,7 +574,7 @@ def container(name: str, root: Path, env: dict[str, str], turns: str, timeout: i
     script = f"""
         cd /relay
         python3 -m relay.cli serve > ~/relay.log 2>&1 & echo $! > ~/relay.pid
-        until python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8787))' 2>/dev/null; do sleep 0.2; done
+        {listening(8787, "~/relay.log")}
         cd ~ && {spec.setup}
         {setup}
         {f"cd /relay && python3 -m relay.cli install {harness} --via {via} >> ~/relay.log 2>&1" if install else ""}
@@ -849,8 +871,8 @@ def evaluate_hook(name: str, home: Path) -> dict:
         layout = "".join("Y" if e.get("kind") == "summary" else "U" for e in event["head"][: last + 1])
         if not re.fullmatch(r"U*Y", layout):
             problems.append(f"compaction {k}: layout {layout} is not Codex's")
-        if event["tokens_before"] < HOOK_THRESHOLD and not event.get("forced"):
-            problems.append(f"compaction {k}: at {event['tokens_before']} tokens, below the strategy's {HOOK_THRESHOLD}")
+        if event["tokens_before"] < (threshold := HOOK_THRESHOLDS[name.split(":")[1]]) and not event.get("forced"):
+            problems.append(f"compaction {k}: at {event['tokens_before']} tokens, below the strategy's {threshold}")
         summary = next((e["text"] for e in event["head"] if e.get("kind") == "summary"), "")
         start = any("ref" in e for e in event["head"][last + 1:])  # the new turn follows the summary
         starts, mids = starts + start, mids + (not start)
@@ -923,7 +945,7 @@ def evaluate_clm(name: str, home: Path, steering: str | None = None) -> dict:
     problems: list[str] = []
     edited = [n for n, r in enumerate(requests) if r["compacted"]]
     sizes = [int(n) for r in requests for n in re.findall(r"\[context: ~(\d+)/", json.dumps(r.get("forwarded") or {}))[-1:]]
-    if not events and max(sizes, default=0) > CLM_BUDGET - 2048:  # Relay's readout (some gateways report no usage)
+    if not events and max(sizes, default=0) > CLM_BUDGETS.get(name.split(":")[0], CLM_BUDGET) - 2048:  # Relay's readout (some gateways report no usage)
         problems.append("the model never edited its context, past its limit")
     if len(edited) != len(events):
         problems.append(f"{len(events)} edits logged, {len(edited)} requests rewritten")
@@ -954,7 +976,8 @@ def evaluate_clm(name: str, home: Path, steering: str | None = None) -> dict:
         later = [r for r in requests[at:until] if codec.items(r["body"])[: event["covered"]] == raw[: event["covered"]]]
         for r in later:
             sent = codec.items(r.get("forwarded") or r["body"])
-            sent.append(without_note(sent[-1]))  # Anthropic and Gemini join the notes to the last user turn
+            # Anthropic and Gemini join the notes to the last user turn (before any trailing system message)
+            sent += [without_note(next(item for item in reversed(sent) if item.get("role") != "system"))]
             sent += [without_guidance(item) for item in sent if "## Managing your context" in json.dumps(item)]
             if gone := [n for n in kept if raw[n] not in sent]:
                 problems.append(f"edit {k}: kept turns {gone} not forwarded as they were")
@@ -1481,6 +1504,8 @@ def main() -> int:
                         help="the harness's own auto-compaction set to fire early; it must stay off")
     options = parser.parse_args()
     names = options.names or (list(SPECS) if options.matrix else parser.error("name a spec or use --matrix"))
+    if options.native_compact and (unsupported := [n for n in names if n.split(":")[0] not in NATIVE_COMPACT]):
+        parser.error(f"--native-compact: no headless compaction of their own: {', '.join(unsupported)}")
     results = []
     for name in names:
         results.append(run(name, options.growth, probe=options.probe, subagent=options.subagent, window=options.window,

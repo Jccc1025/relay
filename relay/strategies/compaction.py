@@ -7,8 +7,7 @@ user messages within `retain_user_tokens` (newest first; the oldest one kept may
 truncated) and the summary last. Mid-turn (the request ends with tool results) all of it
 is summarized; at the start of a turn the summary covers everything before the new turn,
 which stays verbatim. The harness's own context is not the strategy's concern: the harness
-profile puts its current state into the result (Codex: above the last user message
-mid-turn, after the summary at a turn start). A compaction that would free less than
+profile puts its current state into the result (Codex: above the last user message kept). A compaction that would free less than
 `min_gain` of the budget is skipped, so a threshold set too close to the fixed prompt
 overhead cannot trigger a summary on every request.
 """

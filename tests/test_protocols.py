@@ -154,6 +154,11 @@ class AnthropicMessagesTests(unittest.TestCase):
         self.assertEqual((request["stream"], request["max_tokens"]), (False, 32_000))
         self.assertEqual(request["messages"], [{"role": "user", "content": [{"type": "text", "text": "SUMMARIZE"}]}])
 
+    def test_summary_request_moves_trailing_system_messages_after_the_prompt(self) -> None:
+        user, system = {"role": "user", "content": "task"}, {"role": "system", "content": "env"}
+        request = self.codec.summary_request({"model": "m", "messages": []}, [user, system], "SUMMARIZE")
+        self.assertEqual(request["messages"], [user, self.codec.user_message("SUMMARIZE"), system])  # none lost
+
     def test_usage_counts_cached_prompt_tokens(self) -> None:
         start = {"type": "message_start", "message": {"usage": {
             "input_tokens": 5, "cache_creation_input_tokens": 10, "cache_read_input_tokens": 100}}}

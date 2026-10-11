@@ -41,7 +41,7 @@ from .base import Installation, Supplied, SummaryNeeded, render
 PLUGIN = Path(__file__).parent / "plugins" / "claude_code"  # a local marketplace holding the plugin
 ALWAYS = "0.01"  # Claude Code's trigger, in percent of its window: below any request
 MARGIN = 33_000  # below Claude Code's window, where it would have compacted at the latest
-TAIL = "These messages came after your latest reply above:"
+TAIL = "Since your latest reply above, these came in (the results of its tool calls, then anything the user said):"
 HISTORY = "The conversation so far:"
 
 

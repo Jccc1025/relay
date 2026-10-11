@@ -13,9 +13,13 @@ RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_
 RUN curl -fsSL https://code.kimi.com/kimi-code/install.sh \
     | KIMI_INSTALL_DIR=/opt/kimi-code KIMI_NO_MODIFY_PATH=1 bash \
     && ln -sf /opt/kimi-code/bin/kimi /usr/local/bin/kimi && chmod -R a+rX /opt/kimi-code
-RUN pip3 install --break-system-packages --no-cache-dir 'litellm[proxy]'
 RUN npm install -g --no-fund --no-audit @deepseek-ai/dsh
 RUN npm install -g --no-fund --no-audit @tencent-ai/codebuddy-code
 RUN pip3 install --break-system-packages --no-cache-dir nanobot-ai hermes-agent mini-swe-agent
 # RELAY_STRATEGY=rlm runs the RLM authors' package inside Relay.
 RUN pip3 install --break-system-packages --no-cache-dir rlms==0.1.3
+# LiteLLM's proxy in a venv of its own: it needs mcp>=2.2, nanobot needs mcp<2. Last, so
+# that mini-swe-agent's own litellm (a library) does not take over the command.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/litellm && /opt/litellm/bin/pip install --no-cache-dir 'litellm[proxy]' \
+    && ln -sf /opt/litellm/bin/litellm /usr/local/bin/litellm
