@@ -318,8 +318,7 @@ def _place(codec: Codec, harness: Harness, raw: list[WireItem], originals: list[
     head, tail = answer[: summary + 1], answer[summary + 1 :]
     cut = min((item.ref for item in tail if item.ref is not None), default=len(raw))
     state = tuple(item for item in harness.state(codec, raw).items if item.ref is None or item.ref < cut)
-    mid_turn = cut == len(raw)
-    return [*codec.arrange(harness.place(head, state, mid_turn), mid_turn), *_merge(tail, [i for i in own if i.ref >= cut])]
+    return [*codec.arrange(harness.place(head, state), cut == len(raw)), *_merge(tail, [i for i in own if i.ref >= cut])]
 
 
 def _merge(items: tuple[Item, ...], own: list[Item]) -> list[Item]:

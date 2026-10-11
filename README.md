@@ -189,10 +189,10 @@ Behavior follows `codex-rs/core/src/compact.rs`; prompts are vendored verbatim i
   to `RELAY_RETAIN_USER_TOKENS` (the oldest one kept is truncated in the middle; media is
   reduced to text; earlier summaries are dropped) and the summary as a user message
   starting with Codex's summary prefix. Mid-turn (the request ends with tool results)
-  everything is summarized, the initial context sits just above the last real user
-  message and the summary comes last. At the start of a turn the summary covers the
-  history before it, the initial context is re-injected after the summary, and the new
-  turn follows verbatim.
+  everything is summarized and the summary comes last; at the start of a turn the summary
+  covers the history before it and the new turn follows verbatim. Either way the initial
+  context sits just above the last real user message kept (Codex 0.162; before, Codex
+  re-injected it after the summary at a turn start).
 - The initial context is what the harness injected before the model's first action:
   system messages and context messages (environment, instructions, `<system-reminder>`
   blocks). Like Codex, which rebuilds it from session state, Relay takes it from the

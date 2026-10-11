@@ -710,10 +710,11 @@ def evaluate(name: str, home: Path, need: tuple[int, int] | None = None, selfcom
         starts, mids = starts + start, mids + (not start)
         if start and resume_reused is None:
             resume_reused = event["items_before"] < len(raw)
+        # The context just above the last user message, mid-turn and at a turn start alike (Codex 0.162).
         if harness.name == "codex":  # developer sections join Codex's context block
-            pattern = r"S*U*Y[SC]*" if start else r"S*U*[SC]*U?Y"
+            pattern = r"S*U*[SC]*U?Y"
         else:  # Anthropic: system last
-            pattern = r"S*U*YC*" if start else r"S*U*C*U?YS*"
+            pattern = r"S*U*C*U?YS*"
         if not re.fullmatch(pattern, layout):
             problems.append(f"compaction {k}: layout {layout} is not Codex's")
         summary = next((e["text"] for e in head if e.get("kind") == "summary"), "")

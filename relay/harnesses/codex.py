@@ -124,8 +124,7 @@ class Codex(Harness):
 
     def state(self, codec: Codec, items: list[WireItem]) -> State:
         """Re-render the initial context from the context updates in the history, like Codex:
-        its per-request prefix stays first, and the rendering joins the context block; mid-turn,
-        the updates written after the model's last response come after it."""
+        its per-request prefix stays first, and the rendering joins the context block."""
 
         rendering = rebuild(items) if codec.name == "openai_responses" else None
         if rendering is None:
@@ -140,17 +139,8 @@ class Codex(Harness):
                 *(kept(part, Kind.CONTEXT) if isinstance(part, int)
                   else Item(Kind.CONTEXT, codec.classify(part).text, wire=json.dumps(part, ensure_ascii=False))
                   for part in rendering.context),
-                *(replace(self.refine(codec.classify(items[index])), ref=index) for index in rendering.trailing),
             ),
         )
-
-    def place(self, head: tuple[Item, ...], state: tuple[Item, ...], mid_turn: bool) -> tuple[Item, ...]:
-        """Like Codex, except that mid-turn the updates newer than everything the head keeps (those
-        that open the next step) follow the compacted history."""
-
-        refs = [item.ref for item in head if item.ref is not None]
-        newer = tuple(item for item in state if mid_turn and refs and item.ref is not None and item.ref > max(refs))
-        return (*super().place(head, tuple(item for item in state if item not in newer), mid_turn), *newer)
 
     def settings(self) -> list[Setting]:
         """Re-point the built-in OpenAI provider, so Codex keeps its own login and its
@@ -181,7 +171,6 @@ class Rendering:
 
     pinned: tuple[int, ...]  # per-request prefix (`additional_tools`, base instructions)
     context: tuple[int | WireItem, ...]  # the re-rendered initial context
-    trailing: tuple[int, ...] = ()  # mid-turn, the updates that follow the compacted history
 
 
 def section(text: str) -> str | None:
@@ -194,11 +183,6 @@ def section(text: str) -> str | None:
         return None
     name = match.group(1)  # e.g. "permissions instructions", or a tag with attributes
     return name.split()[0] if "=" in name else name
-
-
-def _foldable(text: str) -> bool:
-    key = section(text)
-    return key in BUNDLE or key in SEPARATE or key in USER_CONTEXT or text.startswith(PREFIX_SAVED)
 
 
 def is_context(item: WireItem) -> bool:
@@ -227,15 +211,11 @@ def rebuild(items: list[WireItem]) -> Rendering | None:
 
     last_agent = agent[-1]
     pending = any(_is_user_turn(item) for item in items[last_agent + 1 :])
-    # Mid-turn, Codex compacts with the state it built before the model's last response; the
-    # updates written after that response open the next step, after the compacted history.
+    # Mid-turn, the child threads are those before the model's last response.
     settled = len(items) if pending else _last_response(items, last_agent)
-    model_switch, trailing, environment = None, [], start
+    model_switch, environment = None, start
     for index in range(end, len(items)):
         if not is_context(items[index]):
-            continue
-        if index > settled and all(_foldable(text) for text in _parts(items[index]) or []):
-            trailing.append(index)
             continue
         for text in _parts(items[index]) or []:
             key = section(text)
@@ -252,7 +232,7 @@ def rebuild(items: list[WireItem]) -> Rendering | None:
         _apply(render, "model_switch", model_switch)
     _follow_subagents(render, items, environment, settled)
     context = tuple(message.wire() for message in render if message.parts)
-    return Rendering(tuple(pinned), context, tuple(trailing))
+    return Rendering(tuple(pinned), context)
 
 
 @dataclass
@@ -570,14 +550,15 @@ def _insert(render: list[_Message], key: str, text: str) -> None:
 
 
 def _prefix(items: list[WireItem]) -> list[int]:
-    """Codex's per-request prefix: `additional_tools` and the base instructions after it."""
+    """Codex's per-request prefix: `additional_tools`, if any, and the base instructions after it
+    (a developer message of no section; in the input since 0.162, before that only after
+    `additional_tools`)."""
 
-    if not items or items[0].get("type") != "additional_tools":
-        return []
-    parts = _parts(items[1]) if len(items) > 1 else None
-    if items[1:2] and items[1].get("role") == "developer" and parts and len(parts) == 1 and section(parts[0]) is None:
-        return [0, 1]
-    return [0]
+    start = 1 if items and items[0].get("type") == "additional_tools" else 0
+    parts = _parts(items[start]) if len(items) > start else None
+    if parts and items[start].get("role") == "developer" and len(parts) == 1 and section(parts[0]) is None:
+        return list(range(start + 1))
+    return list(range(start))
 
 
 def _parts(item: WireItem) -> list[str] | None:

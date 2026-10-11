@@ -222,7 +222,8 @@ class InitialContextTests(unittest.TestCase):
     def test_initial_context_survives_repeated_compaction_in_codex_layout(self) -> None:
         engine, upstream = Engine(Compaction(threshold=300, min_gain=0)), Upstream()
         context = msg("user", "<environment_context>cwd</environment_context>")
-        history = [msg("developer", "rules"), context, msg("user", "task"), *step(1),
+        rules = msg("developer", "<permissions instructions>rules</permissions instructions>")
+        history = [rules, context, msg("user", "task"), *step(1),
                    msg("assistant", "done"), msg("user", "more"), *step(2)]
         for n in range(3, 6):  # each request compacts again
             history += step(n)
@@ -231,7 +232,7 @@ class InitialContextTests(unittest.TestCase):
             engine.record(exchange, 500)
             sent = exchange.body["input"]
             # Codex re-renders its developer context with the rest, just above the last user message.
-            self.assertEqual(sent[:4], [msg("user", "task"), msg("developer", "rules"), context, msg("user", "more")])
+            self.assertEqual(sent[:4], [msg("user", "task"), rules, context, msg("user", "more")])
             self.assertEqual(CODEC.classify(sent[4]).text.split("\n")[0], SUMMARY_PREFIX.split("\n")[0])
             self.assertEqual(len(sent), 5)
 
