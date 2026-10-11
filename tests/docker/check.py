@@ -22,8 +22,7 @@ added to the context, so a run compacts mid-turn and at the start of a turn, sev
 
 Checks, for every compaction: the summary contains every code read so far (information
 survives repeated compaction); the new context has Codex's layout (system, recent user
-messages verbatim, the initial context above the last user message and the summary last
-mid-turn, or re-injected after the summary at a turn start) and keeps all of the initial
+messages verbatim, the initial context above the last user message, the summary last) and keeps all of the initial
 context; and every later request of the conversation that Relay forwarded carries exactly
 the latest summary and none of the summarized tool output. Also: no file was read twice, both answers list the right codes in
 order, no compaction failed, and the upstream accepted every model call.
@@ -192,11 +191,19 @@ HOOK_THRESHOLD = 30_000
 # `--strategy clm`: the model edits its own context through a mirror file; this budget is below what
 # the task needs unedited (its reminders and readout are what make the model edit).
 CLM_BUDGET = 26_000
+
+def listening(port: int, log: str) -> str:
+    """Shell that waits up to two minutes for a server on `port`, else shows its log and fails."""
+
+    up = f"(: </dev/tcp/127.0.0.1/{port}) 2>/dev/null"
+    return f"for _ in $(seq 600); do {up} && break; sleep 0.2; done; {up} || {{ tail -20 {log}; exit 1; }}"
+
+
 RECORDER = f"""UPSTREAM=$(python3 -c 'import json, pathlib; p = pathlib.Path("~/.claude/settings.json").expanduser()
 print((json.loads(p.read_text()) if p.exists() else {{}}).get("env", {{}}).get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"))')
 (cd /relay && RELAY_PORT=8788 RELAY_STRATEGY=compaction RELAY_COMPACT_GROWTH=1000000000 RELAY_HARNESS=claude_code RELAY_ANTHROPIC_BASE_URL=$UPSTREAM \
   python3 -m relay.cli serve > ~/recorder.log 2>&1 &)
-until python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8788))' 2>/dev/null; do sleep 0.2; done
+{listening(8788, "~/recorder.log")}
 {JSON_MERGE.format("~/.claude/settings.json", "env.ANTHROPIC_BASE_URL", '"http://127.0.0.1:8788"')}"""
 
 
@@ -315,9 +322,10 @@ model_list:
   - model_name: {GPT}
     litellm_params: {{model: openai/{GPT}, api_key: os.environ/OPENAI_API_KEY}}
 litellm_settings: {{drop_params: true}}
+general_settings: {{dangerously_permit_weak_or_unset_master_key: true}}  # it listens on 127.0.0.1 in the container
 YAML
 litellm --config ~/litellm.yaml --port 4000 > ~/litellm.log 2>&1 &
-until python3 -c 'import socket; socket.create_connection(("127.0.0.1", 4000))' 2>/dev/null; do sleep 0.5; done"""
+{listening(4000, "~/litellm.log")}"""
 # The user already routes the harness through LiteLLM, which translates its protocol to
 # OpenAI; `relay install` then wraps that gateway.
 
@@ -552,7 +560,7 @@ def container(name: str, root: Path, env: dict[str, str], turns: str, timeout: i
     script = f"""
         cd /relay
         python3 -m relay.cli serve > ~/relay.log 2>&1 & echo $! > ~/relay.pid
-        until python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8787))' 2>/dev/null; do sleep 0.2; done
+        {listening(8787, "~/relay.log")}
         cd ~ && {spec.setup}
         {setup}
         {f"cd /relay && python3 -m relay.cli install {harness} --via {via} >> ~/relay.log 2>&1" if install else ""}
