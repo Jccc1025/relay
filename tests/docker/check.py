@@ -196,6 +196,8 @@ HOOK_THRESHOLD = 42_000
 # `--strategy clm`: the model edits its own context through a mirror file; this budget is below what
 # the task needs unedited (its reminders and readout are what make the model edit).
 CLM_BUDGET = 26_000
+# (Claude Code's own request is about 31.5k: below that the model cannot edit its way under any budget.)
+CLM_BUDGETS = {"claude_code": 45_000}
 
 def listening(port: int, log: str) -> str:
     """Shell that waits up to two minutes for a server on `port`, else shows its log and fails."""
@@ -498,7 +500,8 @@ def run(name: str, growth: int | None = None, retried: bool = False, probe: bool
         trigger = {"RELAY_STRATEGY": strategy, "RELAY_ACM_DIR": "/project/.acm"}
         trigger |= {"RELAY_CONTEXT_WINDOW": str(window or BASELINE_WINDOW)} if strategy == "selfcompact" else {}
     if strategy == "clm":  # the files in HOME, where the run can be inspected
-        trigger = {"RELAY_STRATEGY": "clm", "RELAY_CLM_BUDGET": str(CLM_BUDGET), "RELAY_CLM_DIR": "/project/.live_ctx"}
+        trigger = {"RELAY_STRATEGY": "clm", "RELAY_CLM_BUDGET": str(CLM_BUDGETS.get(harness, CLM_BUDGET)),
+                   "RELAY_CLM_DIR": "/project/.live_ctx"}
         if clm_edit:  # no budget pressure: the edit is the task
             trigger = {k: v for k, v in trigger.items() if k != "RELAY_CLM_BUDGET"} | {"RELAY_CLM_NUDGES": "off"}
         if steering:
@@ -941,7 +944,7 @@ def evaluate_clm(name: str, home: Path, steering: str | None = None) -> dict:
     problems: list[str] = []
     edited = [n for n, r in enumerate(requests) if r["compacted"]]
     sizes = [int(n) for r in requests for n in re.findall(r"\[context: ~(\d+)/", json.dumps(r.get("forwarded") or {}))[-1:]]
-    if not events and max(sizes, default=0) > CLM_BUDGET - 2048:  # Relay's readout (some gateways report no usage)
+    if not events and max(sizes, default=0) > CLM_BUDGETS.get(name.split(":")[0], CLM_BUDGET) - 2048:  # Relay's readout (some gateways report no usage)
         problems.append("the model never edited its context, past its limit")
     if len(edited) != len(events):
         problems.append(f"{len(events)} edits logged, {len(edited)} requests rewritten")
@@ -972,7 +975,8 @@ def evaluate_clm(name: str, home: Path, steering: str | None = None) -> dict:
         later = [r for r in requests[at:until] if codec.items(r["body"])[: event["covered"]] == raw[: event["covered"]]]
         for r in later:
             sent = codec.items(r.get("forwarded") or r["body"])
-            sent.append(without_note(sent[-1]))  # Anthropic and Gemini join the notes to the last user turn
+            # Anthropic and Gemini join the notes to the last user turn (before any trailing system message)
+            sent += [without_note(next(item for item in reversed(sent) if item.get("role") != "system"))]
             sent += [without_guidance(item) for item in sent if "## Managing your context" in json.dumps(item)]
             if gone := [n for n in kept if raw[n] not in sent]:
                 problems.append(f"edit {k}: kept turns {gone} not forwarded as they were")

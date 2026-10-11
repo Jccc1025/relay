@@ -40,7 +40,8 @@ async function decide($: any, e: any, context: { tokens?: number; window: number
     agent: e.agentId ?? null,
     trigger: e.trigger,
     model: await $.session.model(),
-    tokens: context.tokens ?? null, // the upstream's count of the last request
+    // the upstream's count of the last request: the session's, never a sub-agent's (Relay estimates that)
+    tokens: e.agentId ? null : context.tokens ?? null,
     window: context.window,
     messages: e.messages.map(({ handle, ...message }: Message) => message),
     summaries: {} as Record<string, string>,
