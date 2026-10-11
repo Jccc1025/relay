@@ -411,13 +411,15 @@ class _Summarizer:
         return self.codec.output_text(payload)
 
     def _post(self, request: Body) -> tuple[int, Any]:
-        """One request of Relay's own, retried while rate limited, overloaded or cut short."""
+        """One request of Relay's own, retried while rate limited, overloaded, cut short or empty
+        (a model may end its turn at once, without a word)."""
 
         attempt = 0
         while True:
             self.requests += 1
             status, payload = self.post(request)
-            incomplete = status < 300 and not (isinstance(payload, dict) and self.codec.finished(payload))
+            answered = isinstance(payload, dict) and self.codec.finished(payload) and self.codec.output_text(payload)
+            incomplete = status < 300 and not answered
             if not (incomplete or status in TRANSIENT) or attempt == RETRIES:
                 return status, payload
             attempt += 1

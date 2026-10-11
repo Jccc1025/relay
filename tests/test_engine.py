@@ -296,6 +296,16 @@ class SummaryRetryTests(unittest.TestCase):
             exchange = engine.prepare(CODEC, HARNESS, request, tenant="t", post=Upstream(*[cut_short] * 6))
         self.assertIs(exchange.body, request)  # gave up: forwarded unchanged
 
+    def test_empty_summaries_are_retried(self) -> None:
+        empty = (200, {"status": "completed", "output": []})  # the model ended its turn at once
+        engine = Engine(Compaction(threshold=300, min_gain=0))
+        upstream = Upstream(empty)
+        with unittest.mock.patch("relay.core.engine.time.sleep"):
+            exchange = engine.prepare(CODEC, HARNESS, body(msg("user", "task"), *step(1), *step(2)),
+                                      tenant="t", post=upstream)
+        self.assertTrue(exchange.compacted)
+        self.assertEqual(len(upstream.requests), 2)
+
 
 class UnreportedUsageTests(unittest.TestCase):
     def test_growth_falls_back_to_estimates_when_usage_is_never_reported(self) -> None:

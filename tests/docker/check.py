@@ -150,7 +150,9 @@ EARLY = {
     "openclaw": JSON_MERGE.format("~/.openclaw/openclaw.json", "models.providers.openai.models",
                                   '[{"id": "gpt-6-luna", "name": "gpt-6-luna", "contextWindow": 32000, "maxTokens": 8000}]'),
     "kimi_code": "sed -i 's/^max_context_size = 200000/max_context_size = 30000/' ~/.kimi-code/config.toml",
-    "hermes": "sed -i 's/^model:/model:\\n  context_length: 30000/' ~/.hermes/config.yaml",
+    # (Hermes refuses a context window under 64k: it compresses at 30% of one, about 19k tokens)
+    "hermes": "sed -i 's/^model:/model:\\n  context_length: 64000/' ~/.hermes/config.yaml && "
+              "printf 'compression:\\n  enabled: true\\n  threshold: 0.3\\n' >> ~/.hermes/config.yaml",
     "nanobot": JSON_MERGE.format("~/.nanobot/config.json", "agents.defaults.contextWindowTokens", "30000"),
     "deepseek_harness": "printf -- '- id: compaction-basic\\n  config:\\n    thresholdRatio: 0.06\\n    retainRatio: 0.02\\n' "
                         ">> ~/.dsh/cordis.patch.yml",
@@ -164,7 +166,8 @@ COMPACT_ASK = re.compile(r"structured summary|<conversation>|summary of our conv
 
 # `--native-compact`: the harness compacts its own history between the turns, as a user would,
 # with this command sent through its own continue/resume.
-NATIVE_COMPACT = {"claude_code": "/compact", "codex": "/compact", "gemini_cli": "/compress", "pi": "/compact",
+# (Not Gemini CLI: since 0.63 its headless mode hands `/compress` to the model as a question.)
+NATIVE_COMPACT = {"claude_code": "/compact", "codex": "/compact", "pi": "/compact",
                   "opencode": "/compact", "kilo": "/compact", "crush": "/compact", "openclaw": "/compact",
                   "goose": "/compact", "kimi_code": "/compact", "hermes": "/compress", "nanobot": "/compact",
                   "deepseek_harness": "/compact", "workbuddy": "/compact"}
@@ -320,6 +323,8 @@ YAML"""
 LITELLM = f"""cat > ~/litellm.yaml <<'YAML'
 model_list:
   - model_name: {GPT}
+    litellm_params: {{model: openai/{GPT}, api_key: os.environ/OPENAI_API_KEY}}
+  - model_name: "*"  # the harness's own helper models (Gemini CLI's `/compress`) get the same one
     litellm_params: {{model: openai/{GPT}, api_key: os.environ/OPENAI_API_KEY}}
 litellm_settings: {{drop_params: true}}
 general_settings: {{dangerously_permit_weak_or_unset_master_key: true}}  # it listens on 127.0.0.1 in the container
@@ -1489,6 +1494,8 @@ def main() -> int:
                         help="the harness's own auto-compaction set to fire early; it must stay off")
     options = parser.parse_args()
     names = options.names or (list(SPECS) if options.matrix else parser.error("name a spec or use --matrix"))
+    if options.native_compact and (unsupported := [n for n in names if n.split(":")[0] not in NATIVE_COMPACT]):
+        parser.error(f"--native-compact: no headless compaction of their own: {', '.join(unsupported)}")
     results = []
     for name in names:
         results.append(run(name, options.growth, probe=options.probe, subagent=options.subagent, window=options.window,
