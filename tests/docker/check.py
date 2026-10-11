@@ -190,9 +190,10 @@ GROWTH = 5_000  # each file adds about 2k tokens
 # `--via hook`: the harness asks Relay before every request, and Relay's strategy compacts at this
 # size. Relay is off the model path, so a second Relay that never compacts records it, in front of
 # whatever endpoint the user's configuration names.
-# Claude Code's own request is about 31.5k tokens (2.1.294): above it, room for about four files
-# between compactions (Claude Code gives up on one that refills its context within three turns).
-HOOK_THRESHOLD = 42_000
+# Claude Code's own request is about 31.5k tokens on Claude, 17k on GPT (2.1.294), turn 2's note 6k
+# more: above them, room for about four files after a compaction (Claude Code gives up on one that
+# refills its context within three turns).
+HOOK_THRESHOLDS = {"claude": 50_000, "login": 50_000, "gpt": 34_000}
 # `--strategy clm`: the model edits its own context through a mirror file; this budget is below what
 # the task needs unedited (its reminders and readout are what make the model edit).
 CLM_BUDGET = 26_000
@@ -491,7 +492,7 @@ def run(name: str, growth: int | None = None, retried: bool = False, probe: bool
     trigger = {"RELAY_CONTEXT_WINDOW": str(window)} if window else {
         "RELAY_COMPACT_GROWTH": str(10**9 if probe or selfcompact else growth or GROWTH)}
     if via == "hook":
-        trigger = {"RELAY_COMPACT_THRESHOLD": str(HOOK_THRESHOLD)}
+        trigger = {"RELAY_COMPACT_THRESHOLD": str(HOOK_THRESHOLDS[name.split(":")[1]])}
     if strategy == "folding":
         trigger = {"RELAY_STRATEGY": "folding"}
     if strategy == "prolong":  # compaction inside, as usual, and the log where the harness's tools reach it
@@ -870,8 +871,8 @@ def evaluate_hook(name: str, home: Path) -> dict:
         layout = "".join("Y" if e.get("kind") == "summary" else "U" for e in event["head"][: last + 1])
         if not re.fullmatch(r"U*Y", layout):
             problems.append(f"compaction {k}: layout {layout} is not Codex's")
-        if event["tokens_before"] < HOOK_THRESHOLD and not event.get("forced"):
-            problems.append(f"compaction {k}: at {event['tokens_before']} tokens, below the strategy's {HOOK_THRESHOLD}")
+        if event["tokens_before"] < (threshold := HOOK_THRESHOLDS[name.split(":")[1]]) and not event.get("forced"):
+            problems.append(f"compaction {k}: at {event['tokens_before']} tokens, below the strategy's {threshold}")
         summary = next((e["text"] for e in event["head"] if e.get("kind") == "summary"), "")
         start = any("ref" in e for e in event["head"][last + 1:])  # the new turn follows the summary
         starts, mids = starts + start, mids + (not start)

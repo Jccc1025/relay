@@ -71,7 +71,8 @@ class HarnessEndToEndTests(unittest.TestCase):
                     self.assertIn(FINAL_TEXT, result.stdout)
 
         bodies = fake.bodies(path)
-        summaries = [b for b in bodies if COMPACTION_MARKER in _text(b[key][-1])]
+        # (the prompt, which Claude Code's system messages may follow)
+        summaries = [b for b in bodies if COMPACTION_MARKER in _text([i for i in b[key] if i.get("role") != "system"][-1])]
         main = [b for b in bodies if b not in summaries]
         first = bodies.index(summaries[0])
         self.assertGreaterEqual(len(summaries), 2)
