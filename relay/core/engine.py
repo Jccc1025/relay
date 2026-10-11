@@ -385,7 +385,9 @@ class _Summarizer:
         while True:
             fixed = [*lead, self.codec.user_message(f"{SUMMARY_PREFIX}\n{summary}")] if summary else lead
             overhead = approx_tokens(self.codec.preamble(self.body), self.per_token) + sum(map(self._tokens, fixed))
-            piece = _piece(self.codec, rest, budget - overhead, self._tokens) if budget else len(rest)
+            # (A window that the request's fixed part alone exceeds is no measure: the harness runs
+            # with that part. Then all of it goes, and an overflow splits it.)
+            piece = _piece(self.codec, rest, budget - overhead, self._tokens) if budget and budget > overhead else len(rest)
             status, payload = self._post(self.codec.summary_request(self.body, [*fixed, *rest[:piece]], prompt))
             if self.codec.is_overflow(status, payload):
                 if piece <= _piece(self.codec, rest, 0, self._tokens):

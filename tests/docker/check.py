@@ -542,7 +542,10 @@ def container(name: str, root: Path, env: dict[str, str], turns: str, timeout: i
 
     spec, harness = SPECS[name], name.split(":")[0]
     home, project = root / "home", root / "project"
-    env = {**env, "RELAY_EVENT_LOG": "/home/agent/events.jsonl", "RELAY_TRACE": "/home/agent/trace.jsonl"}
+    env = {**env, "RELAY_EVENT_LOG": "/home/agent/events.jsonl", "RELAY_TRACE": "/home/agent/trace.jsonl",
+           # A copied Claude login would load the account's claude.ai connectors (its mail, its
+           # documents) as a hundred more tools: never in a test.
+           "ENABLE_CLAUDEAI_MCP_SERVERS": "0"}
     passwd = root / "passwd"  # some harnesses look the user up (os.userInfo)
     passwd.write_text(f"root:x:0:0::/root:/bin/bash\nagent:x:{os.getuid()}:{os.getgid()}::/home/agent:/bin/bash\n")
     mounts = [f"{REPO}:/relay:ro", f"{home}:/home/agent", f"{project}:/project", f"{passwd}:/etc/passwd:ro"]
