@@ -78,7 +78,7 @@ class SetupTests(unittest.TestCase):
         return code, out.getvalue()
 
     def test_the_harness_is_left_alone_when_relay_does_not_start(self) -> None:
-        with mock.patch.object(service, "status", return_value=None), \
+        with mock.patch.object(service, "status", return_value=None), mock.patch.object(service, "taken", return_value=False), \
                 mock.patch.object(service, "start", return_value="process"), \
                 mock.patch.object(service, "wait", return_value=None):
             code, out = self.run_cli("setup", "codex", "--strategy", "clm")
@@ -90,7 +90,7 @@ class SetupTests(unittest.TestCase):
 
     def test_setup_starts_relay_then_points_the_harness_at_it(self) -> None:
         calls = []
-        with mock.patch.object(service, "status", return_value=None), \
+        with mock.patch.object(service, "status", return_value=None), mock.patch.object(service, "taken", return_value=False), \
                 mock.patch.object(service, "start", side_effect=lambda: calls.append("start") or "systemd"), \
                 mock.patch.object(service, "wait", side_effect=lambda *a, **k: calls.append(("wait", a)) or {"strategy": "clm"}):
             code, out = self.run_cli("setup", "codex", "--strategy", "clm", "--set", "clm_budget=40000")
@@ -100,6 +100,19 @@ class SetupTests(unittest.TestCase):
         self.assertIn("127.0.0.1:8787/up/codex-0", (self.codex / "config.toml").read_text())
         self.assertEqual((settings.value("strategy"), settings.value("clm_budget")), ("clm", "40000"))
         self.assertIn("one already open goes on as it was", out)
+
+    def test_a_port_something_else_holds_is_given_up_for_a_free_one(self) -> None:
+        with mock.patch.object(service, "status", return_value=None), mock.patch.object(service, "taken", return_value=True), \
+                mock.patch.object(service, "free_port", return_value=48123), mock.patch.object(service, "start", return_value="process"), \
+                mock.patch.object(service, "wait", return_value={"strategy": "compaction"}):
+            code, out = self.run_cli("setup", "codex")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(settings.value("port"), "48123")
+        self.assertIn("127.0.0.1:48123/up/codex-0", (self.codex / "config.toml").read_text())
+        with mock.patch.object(service, "status", return_value=None), mock.patch.object(service, "taken", return_value=True):
+            code, out = self.run_cli("setup", "codex", "--set", "port=9")  # (one the user chose: their call)
+        self.assertEqual(code, 1)
+        self.assertIn("choose another port", out)
 
     def test_changing_the_strategy_reaches_the_running_relay_without_a_restart(self) -> None:
         with mock.patch.object(service, "status", return_value={"strategy": "compaction"}), \

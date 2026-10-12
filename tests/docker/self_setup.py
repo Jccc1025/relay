@@ -1,13 +1,21 @@
-"""Codex sets Relay up for itself, told in one sentence, as a user would in Remote Control.
+"""A harness sets Relay up for itself, told in a sentence, then uses it session after session.
 
-    RELAY_TEST_KEYS=keys.env python tests/docker/self_setup.py [codex:gpt | codex:gpt-api] [--strategy clm]
+    RELAY_TEST_KEYS=keys.env python tests/docker/self_setup.py codex:gpt [claude_code:gpt ...]
 
-In the image, on a user's machine where nothing of Relay runs: turn 1 asks Codex to install Relay
-from /relay and set it up for itself with the strategy, nothing more (`relay help` is how it
-finds out). Then a new conversation does a small task. Checks: Relay runs the strategy, Codex's
-configuration points at Relay, the new conversation's requests went through Relay and the
-strategy acted on them (CLM and Folding rewrite every request; CLM keeps a context file), and the
-answer is right.
+In the image, on a user's machine with one harness and nothing of Relay's (only a checkout at
+/relay to install from; something else listens on Relay's default port):
+
+1. session 1: the harness is asked to install Relay with its installer and set it up for itself;
+2. Relay's thresholds are lowered, as a user tuning it would (`relay set`);
+3. session 2: a task under compaction, the strategy setup chose;
+4. session 3: the harness is asked to switch Relay to CLM;
+5. session 4: the task under CLM;
+6. `relay strategy folding`, then session 5: the task under Folding.
+
+Checks: Relay runs, on a port of its own, and the harness goes through it; each task's answer is
+right and its requests had the strategy (compaction: one of them compacted; CLM and Folding:
+their guidance in what reached the model). Sessions after the install start from a new login
+shell, as after the installer put `relay` on PATH.
 """
 
 from __future__ import annotations
@@ -20,52 +28,88 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from check import SPECS, container  # noqa: E402
+from check import CODES, SPECS, container  # noqa: E402
 
-ASK = ("Install the Relay package from /relay (a local checkout) and set it up for yourself, Codex, "
-       "with the {strategy} strategy. Its `relay help` tells you how. Then tell me what you did.")
-TASK = "Read file_1.txt in full and reply with the value on its line starting with CODE:, nothing else."
+RELAY = "~/.local/bin/relay"
+INSTALL = ("Install Relay for yourself, {harness}: run `sh /relay/install.sh /relay` (a local checkout), then set it "
+           "up for {harness} with `relay setup`; `relay help` explains it. Reply with what you did.")
+SWITCH = "Switch Relay to the clm strategy (`relay help` says how). Reply with what you did."
+TASK = ("[{tag}] Read file_1.txt to file_4.txt in the current directory one after another, in full (for example "
+        "`cat file_1.txt`). Each ends with a line starting with 'CODE:'. Reply with their 4 codes in order, "
+        "comma-separated, and nothing else.")
+MARKS = {"clm": "## Managing your context", "folding": "## Branches (context folding)"}
+
+
+def run(name: str) -> dict:
+    harness, spec = name.split(":")[0], SPECS[name]
+    root = Path(tempfile.mkdtemp(prefix=f"relay-self-setup-{harness}-"))
+    (root / "home").mkdir()
+    (root / "project").mkdir()
+    for n, code in enumerate(CODES[:4], start=1):
+        text = "".join(f"file {n} line {i}: the quick brown fox jumps over the lazy dog\n" for i in range(1, 121))
+        (root / "project" / f"file_{n}.txt").write_text(f"{text}CODE: {code}\n")
+
+    def session(n: int, prompt: str) -> str:  # (after the install, from a new login shell: its PATH)
+        return (f"{'. ~/.profile; ' if n > 1 else ''}export PROMPT={shlex.quote(prompt)} && cd /project && "
+                f"timeout 900 {spec.command} > ~/session{n}.out 2> ~/session{n}.err < /dev/null")
+
+    turns = "\n".join([
+        "(python3 -m http.server 8787 --bind 127.0.0.1 > /dev/null 2>&1 &) && sleep 1",  # (not Relay)
+        session(1, INSTALL.format(harness=harness)),
+        f"{RELAY} status > ~/status.out 2>&1; {RELAY} set compact_growth=5000 compact_min_gain=0 >> ~/status.out 2>&1",
+        session(2, TASK.format(tag="compaction")),
+        session(3, SWITCH),
+        f"{RELAY} strategy >> ~/status.out 2>&1",
+        session(4, TASK.format(tag="clm")),
+        f"{RELAY} strategy folding >> ~/status.out 2>&1",
+        session(5, TASK.format(tag="folding")),
+        f"{RELAY} status >> ~/status.out 2>&1; {RELAY} stop >> ~/status.out 2>&1",
+    ])
+    container(name, root, {}, turns, timeout=5400, install=False, serve=False, importable=False)
+    home = root / "home"
+
+    def read(file: str) -> str:
+        return (home / file).read_text(errors="replace") if (home / file).exists() else ""
+
+    trace = [json.loads(line) for line in read("trace.jsonl").splitlines() if line.strip()]
+    installed = json.loads(read(".config/relay/installed.json") or "{}")
+    settings = json.loads(read(".config/relay/settings.json") or "{}")
+    problems = []
+    if harness not in installed:
+        problems.append(f"{harness} was not set up: {read('session1.out')[-300:]!r}")
+    if str(settings.get("port", "8787")) == "8787":
+        problems.append("Relay did not leave the port something else held")
+    if "strategy: clm" not in read("status.out"):
+        problems.append(f"the harness did not switch Relay to clm: {read('session3.out')[-300:]!r}")
+    for n, strategy in ((2, "compaction"), (4, "clm"), (5, "folding")):
+        tag = f"[{strategy}]"
+        requests = [r for r in trace if "items" in r and tag in json.dumps(r.get("body"))]
+        answer = read(f"session{n}.out").lower()
+        if not requests:
+            problems.append(f"session {n} ({strategy}): no request went through Relay")
+            continue
+        if strategy == "compaction":
+            acted = any(r.get("compacted") for r in requests)
+        else:
+            acted = any(MARKS[strategy] in json.dumps(r.get("forwarded")) for r in requests)
+        if not acted:
+            problems.append(f"session {n}: {strategy} did not act on its requests")
+        if not all(code in answer for code in CODES[:4]):
+            problems.append(f"session {n} ({strategy}): answer is wrong: {answer[-150:]!r}")
+    return {"name": name, "passed": not problems, "problems": problems, "home": str(home),
+            "port": settings.get("port"), "said": read("session1.out").strip()[-400:]}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("name", nargs="?", default="codex:gpt", choices=["codex:gpt", "codex:gpt-api"])
-    parser.add_argument("--strategy", default="clm")
-    options = parser.parse_args()
-    root = Path(tempfile.mkdtemp(prefix="relay-self-setup-"))
-    (root / "home").mkdir()
-    (root / "project").mkdir()
-    (root / "project" / "file_1.txt").write_text("".join(f"line {n}: filler\n" for n in range(40)) + "CODE: quartz\n")
-    turns = f"""
-        cd /project
-        export PROMPT={shlex.quote(ASK.format(strategy=options.strategy))}
-        timeout 900 {SPECS[options.name].command} > ~/turn1.out 2> ~/turn1.err < /dev/null
-        python3 -m relay.cli status > ~/status.out 2>&1
-        export PROMPT={shlex.quote(TASK)}
-        timeout 600 {SPECS[options.name].command} > ~/turn2.out 2> ~/turn2.err < /dev/null
-        ls -1 /tmp/.live_ctx > ~/clm_files.out 2>&1
-        python3 -m relay.cli stop >> ~/status.out 2>&1
-    """
-    container(options.name, root, {}, turns, install=False, serve=False)
-    home = root / "home"
-    read = lambda name: (home / name).read_text(errors="replace") if (home / name).exists() else ""  # noqa: E731
-    trace = [json.loads(line) for line in read("trace.jsonl").splitlines() if line.strip()]
-    task = [r for r in trace if "items" in r and TASK[:40] in json.dumps(r.get("body"))]
-    config = read(".codex/config.toml")
-    problems = [what for what, bad in [
-        (f"Relay does not run {options.strategy}: {read('status.out')[:300]!r}", f"strategy {options.strategy}" not in read("status.out")),
-        ("Codex's configuration does not point at Relay", "127.0.0.1:8787/up/codex-" not in config),
-        ("the new conversation did not go through Relay", not task),
-        ("CLM wrote no context file", options.strategy == "clm" and not read("clm_files.out").strip()),
-        ("the strategy did not act on the new conversation",  # (both add their guidance to every request)
-         options.strategy in ("clm", "folding") and not any(r.get("rewritten") for r in task)),
-        (f"the answer is wrong: {read('turn2.out')[-200:]!r}", "quartz" not in read("turn2.out").lower()),
-    ] if bad]
-    print(f"== {options.name} sets Relay up ({options.strategy}): {'PASS' if not problems else 'FAIL'}  ({home})")
-    print(f"  turn 1 said: {read('turn1.out').strip()[-600:]}")
-    for problem in problems:
-        print(f"  problem: {problem}")
-    return 0 if not problems else 1
+    parser.add_argument("names", nargs="+", choices=list(SPECS))
+    results = [run(name) for name in parser.parse_args().names]
+    for r in results:
+        print(f"== {r['name']} sets Relay up and uses it: {'PASS' if r['passed'] else 'FAIL'}  ({r['home']})")
+        print(f"  port: {r['port']}; it said: {r['said']!r}")
+        for problem in r["problems"]:
+            print(f"  problem: {problem}")
+    return 0 if all(r["passed"] for r in results) else 1
 
 
 if __name__ == "__main__":

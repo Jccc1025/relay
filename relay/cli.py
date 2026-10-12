@@ -135,6 +135,13 @@ def _setup(harness: Harness, strategy: str | None, assignments: list[str], via: 
     restart = bool(AT_START & set(changes))
     settings.save(changes)
     wanted = settings.value("strategy", "compaction")
+    moved = service.status() is None and service.taken()  # (something else there: not Relay)
+    if moved:
+        if "port" in changes:
+            raise ValueError(f"something other than Relay listens at {service.address()}: choose another port")
+        busy, port = service.address(), service.free_port()
+        settings.save({"port": port})
+        print(f"something other than Relay listens at {busy}: Relay listens on port {port}")
     managed = service.record().get("manager") in ("systemd", "launchd")
     if autostart and not managed:
         kind = service.start(autostart=True)
@@ -154,6 +161,8 @@ def _setup(harness: Harness, strategy: str | None, assignments: list[str], via: 
         return 1
     print(f"Relay runs {wanted} at {service.address()}")
     starter = harness.starter(service.start_command())
+    if moved and harness.name in install.installed():
+        install.uninstall(harness.name)  # (pointed at the old port)
     if harness.name not in install.installed() and _install(harness, via, service.address(), starter):
         return 1
     if not starter and service.record().get("manager") == "process":

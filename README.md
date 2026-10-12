@@ -18,7 +18,7 @@ by the initial context, the most recent user messages, and the summary.
 ## Quickstart
 
 ```bash
-pip install -e .
+curl -fsSL https://raw.githubusercontent.com/sunnweiwei/relay/main/install.sh | sh   # or: sh install.sh .
 relay setup codex --strategy clm   # or: claude, gemini_cli, pi, opencode, kilo, crush,
                                    #     openclaw, kimi_code, goose, hermes, nanobot, dsh, workbuddy, mini
 codex                              # use the harness exactly as before

@@ -124,6 +124,12 @@ class Harness:
         at = next(n for n in (last(Kind.USER), last(Kind.SUMMARY), len(head)) if n is not None)
         return (*system, *head[:at], *context, *head[at:])
 
+    def window(self, model: str | None) -> int | None:
+        """The model's context window as the harness itself knows it (its model catalog), if it
+        does: Relay compacts where the harness would."""
+
+        return None
+
     def starter(self, command: str) -> list[Setting]:
         """Settings that have the harness run `command` before a session's first model request
         (`relay setup`: it makes sure Relay runs), where the harness runs such commands unasked."""

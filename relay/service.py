@@ -18,6 +18,7 @@ import os
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -54,6 +55,20 @@ def status(timeout: float = 2.0) -> dict[str, Any] | None:
             return json.loads(response.read())
     except (OSError, ValueError):
         return None
+
+
+def taken() -> bool:
+    """Whether something listens where Relay should (Relay or not)."""
+
+    with socket.socket() as probe:
+        probe.settimeout(1.0)
+        return probe.connect_ex((settings.value("host", "127.0.0.1"), int(settings.value("port", "8787")))) == 0
+
+
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind((settings.value("host", "127.0.0.1"), 0))
+        return probe.getsockname()[1]
 
 
 def wait(strategy: str | None = None, seconds: float = 30.0) -> dict[str, Any] | None:
