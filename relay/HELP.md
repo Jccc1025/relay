@@ -84,7 +84,13 @@ history as the harness has it. Switching back finds the earlier strategy's conte
    network access. Use `~/.local/bin/relay` if that folder is not on PATH.
 2. Run `relay setup <your harness> --strategy <name>` outside your sandbox: it writes the
    harness's config in the home directory and starts Relay. Ask the user to approve it
-   (in Codex, a command that runs with escalated permissions).
+   (in Codex, a command that runs with escalated permissions). Run it even when the harness's
+   configuration looks empty or unusual. Relay knows where each harness keeps its settings,
+   records each value it changes, and `relay uninstall` puts them back.
+   If your harness's sandbox or command policy refuses the installer or `relay`, and asking the
+   user to approve is not possible (some refuse in headless runs, as DeepSeek Harness's sandbox
+   and Gemini CLI's command checker did in our tests), tell the user to run the installer and
+   `relay setup` in a terminal.
 3. Run `relay status` and check that it reports the strategy.
 4. Tell the user that the strategy applies to conversations started from now on, and that
    this one goes on as before. If Relay was already set up, the change applies from the next
