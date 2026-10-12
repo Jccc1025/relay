@@ -29,9 +29,11 @@ from ..core.engine import Engine, Exchange
 from ..core.store import PrefixStore
 from ..harnesses import detect
 from ..protocols import Codec, codec_for
-from ..providers import Upstream, route, upstreams_from_env
+from ..providers import Upstream, route, upstreams_from_settings
 from ..strategies import STRATEGIES
+from ..strategies.base import Strategy
 from .hooks import hook_routes
+from .. import settings
 
 log = logging.getLogger("relay")
 
@@ -41,35 +43,57 @@ _RESPONSE_DROPPED = {"connection", "content-encoding", "content-length", "transf
 
 @dataclass(frozen=True)
 class ProxyConfig:
-    upstreams: dict[str, Upstream] = field(default_factory=upstreams_from_env)
+    upstreams: dict[str, Upstream] = field(default_factory=upstreams_from_settings)
     harness: str | None = None  # force a harness profile instead of detecting it
     trace: str | None = None  # append every managed request (as received) to this JSONL file
     host: str = "127.0.0.1"
     port: int = 8787
 
     @classmethod
-    def from_env(cls) -> ProxyConfig:
+    def from_settings(cls) -> ProxyConfig:
         return cls(
-            harness=os.getenv("RELAY_HARNESS") or None,
-            trace=os.getenv("RELAY_TRACE") or None,
-            host=os.getenv("RELAY_HOST", "127.0.0.1"),
-            port=int(os.getenv("RELAY_PORT", "8787")),
+            harness=settings.value("harness") or None,
+            trace=settings.value("trace") or None,
+            host=settings.value("host", "127.0.0.1"),
+            port=int(settings.value("port", "8787")),
         )
 
 
-def engine_from_env() -> Engine:
-    window = os.getenv("RELAY_CONTEXT_WINDOW")
-    return Engine(
-        STRATEGIES[os.getenv("RELAY_STRATEGY", "compaction")].from_env(),
-        PrefixStore.from_env(),
-        window=int(window) if window else None,
-        event_log=os.getenv("RELAY_EVENT_LOG") or None,
-    )
+def engine_from_settings() -> Engine:
+    engine = Engine(strategy_from_settings(), PrefixStore.from_settings(), event_log=settings.value("event_log") or None)
+    engine.window = window_from_settings()
+    return engine
+
+
+def strategy_from_settings() -> Strategy:
+    name = settings.value("strategy", "compaction")
+    if name not in STRATEGIES:
+        raise ValueError(f"unknown strategy {name!r}: one of {', '.join(STRATEGIES)}")
+    return STRATEGIES[name].from_settings()
+
+
+def window_from_settings() -> int | None:
+    window = settings.value("context_window")
+    return int(window) if window else None
 
 
 def create_app(engine: Engine | None = None, config: ProxyConfig | None = None) -> Starlette:
-    engine = engine or engine_from_env()
-    config = config or ProxyConfig.from_env()
+    # An engine made here follows the settings file: a strategy changed there (`relay strategy`,
+    # `relay set`) applies from the next request on, to every conversation.
+    following = engine is None
+    engine = engine or engine_from_settings()
+    config = config or ProxyConfig.from_settings()
+    seen = [settings.version()]
+
+    def follow() -> None:
+        if not following or (now := settings.version()) == seen[0]:
+            return
+        seen[0] = now
+        try:
+            engine.strategy, engine.window = strategy_from_settings(), window_from_settings()
+            log.info("relay now runs %s", engine.strategy.name)
+        except Exception:
+            log.exception("could not apply the changed settings; %s goes on", engine.strategy.name)
     detect({}, config.harness)  # reject an unknown forced harness at startup
 
     @asynccontextmanager
@@ -80,6 +104,13 @@ def create_app(engine: Engine | None = None, config: ProxyConfig | None = None) 
         await app.state.client.aclose()
         app.state.summary_client.close()
         engine.store.flush()  # a store kept on disk: what changed since it was last written
+
+    async def status(request: Request) -> Response:
+        """What Relay runs now (`relay status`, and `relay setup` waiting for it)."""
+
+        follow()
+        return JSONResponse({"relay": "ok", "strategy": engine.strategy.name, "window": engine.window,
+                             "following": following, "pid": os.getpid()})
 
     async def handle(request: Request) -> Response:
         if request.headers.get("upgrade"):  # e.g. Codex tries WebSockets first, then HTTP
@@ -93,11 +124,12 @@ def create_app(engine: Engine | None = None, config: ProxyConfig | None = None) 
         body = _json(_decompress(content, headers.get("content-encoding", ""))) if codec else None
         if codec is None or not isinstance(body, dict) or not codec.managed(body):
             return await _passthrough(client, request.method, url, headers, content)
+        follow()
         plain = {k: v for k, v in headers.items() if k != "content-encoding"}  # for bodies Relay writes
 
         summary_client: httpx.Client = request.app.state.summary_client
 
-        def trace(**record: Any) -> None:  # test instrumentation, enabled by RELAY_TRACE
+        def trace(**record: Any) -> None:  # test instrumentation, enabled by the `trace` setting
             if config.trace:
                 with open(config.trace, "a", encoding="utf-8") as stream:
                     stream.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -160,7 +192,8 @@ def create_app(engine: Engine | None = None, config: ProxyConfig | None = None) 
         return await _relay(response, codec, streaming, on_usage)
 
     return Starlette(
-        routes=[*hook_routes(engine), Route("/{path:path}", handle, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])],
+        routes=[*hook_routes(engine), Route("/relay/v1/status", status, methods=["GET"]),
+                Route("/{path:path}", handle, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])],
         lifespan=lifespan,
     )
 

@@ -20,16 +20,15 @@ replaces everything after the task with one note. The harness's own context (ins
 environment, reminders) stays out of the file and where the harness sent it. Notes and nudges say
 they come from the context manager, and the urgent nudge asks for the task to go on after the
 edit: a chat harness ends the turn on the first reply without a tool call, where the paper's loop
-ran until the task was submitted. A steering document (`RELAY_CLM_STEERING`, the paper's in-context
+ran until the task was submitted. A steering document (the `clm_steering` setting, the paper's in-context
 instruction) adds a policy of the user's to the guidance; the nudges can be turned off, as in the
-paper's steering runs (`RELAY_CLM_NUDGES=off`). Requests that offer no tools
+paper's steering runs (`clm_nudges` off). Requests that offer no tools
 (a title, a quota check) are left alone.
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, replace
@@ -40,6 +39,7 @@ from typing import Any
 from ..core.ir import LABELS, Context, Item, Kind, Request, note
 from ..core.tokens import item_tokens
 from .base import Summarizer
+from .. import settings
 
 # The paper's "Managing your context" section (clm_agent/prompts.yaml), with the file's block headers.
 GUIDANCE = r"""## Managing your context
@@ -114,12 +114,12 @@ class ContextLanguageModel:
     name: str = "clm"
 
     @classmethod
-    def from_env(cls) -> ContextLanguageModel:
-        budget, steering = os.getenv("RELAY_CLM_BUDGET"), os.getenv("RELAY_CLM_STEERING")
-        return cls(budget=int(budget) if budget else None, reserve=int(os.getenv("RELAY_CLM_RESERVE", "2048")),
-                   directory=os.getenv("RELAY_CLM_DIR", "/tmp/.live_ctx"),
+    def from_settings(cls) -> ContextLanguageModel:
+        budget, steering = settings.value("clm_budget"), settings.value("clm_steering")
+        return cls(budget=int(budget) if budget else None, reserve=int(settings.value("clm_reserve", "2048")),
+                   directory=settings.value("clm_dir", "/tmp/.live_ctx"),
                    steering=Path(steering).read_text(encoding="utf-8").strip() if steering else "",
-                   nudges=os.getenv("RELAY_CLM_NUDGES", "on").lower() not in ("0", "off", "false"))
+                   nudges=settings.value("clm_nudges", "on").lower() not in ("0", "off", "false"))
 
     def fingerprint(self) -> dict[str, Any]:
         return {"name": self.name, "budget": self.budget, "reserve": self.reserve, "directory": self.directory,

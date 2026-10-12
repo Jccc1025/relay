@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import functools
 import json
-import os
 import re
 import tomllib
 from collections.abc import Callable
@@ -20,17 +19,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .settings import home
+
 
 @dataclass(frozen=True)
 class Setting:
     path: Path  # the harness's config file: .json, .yaml, .toml or .env
-    key: tuple[str, ...]  # nested key (YAML list items as "[name=value]"); a single key for .env
+    key: tuple[str, ...]  # nested key (YAML list items as "[name=value]"); a single key for .env; () the whole file
     value: Any = None  # a literal value to write, or ...
     endpoint: str | None = None  # ... the default upstream to wrap when the key is unset
 
 
 def state_file() -> Path:
-    return Path(os.getenv("RELAY_HOME", "~/.config/relay")).expanduser() / "installed.json"
+    return home() / "installed.json"
 
 
 def install(name: str, relay_url: str, settings: list[Setting]) -> None:
@@ -53,6 +54,15 @@ def install(name: str, relay_url: str, settings: list[Setting]) -> None:
         records.append(record)
     state[name] = records
     _save(state)
+    kept = home() / "mounts.json"  # (kept through `relay uninstall`)
+    known = json.loads(kept.read_text()) if kept.exists() else {}
+    kept.write_text(json.dumps({**known, **{r["mount"]: r["origin"] for r in records if "mount" in r}}, indent=2))
+
+
+def installed() -> list[str]:
+    """The harnesses `relay install` has set up."""
+
+    return sorted(_load())
 
 
 def uninstall(name: str) -> list[Path]:
@@ -67,18 +77,22 @@ def uninstall(name: str) -> list[Path]:
 
 
 def mounts() -> dict[str, str]:
-    """Installed mounts, e.g. {"/up/codex-0": "https://chatgpt.com"}."""
+    """Where Relay forwards, e.g. {"/up/codex-0": "https://chatgpt.com"}: every mount installed,
+    uninstalled ones too, as a conversation the harness started through Relay goes on through it."""
 
-    path = state_file()
-    if not path.exists():
-        return {}
-    stat = path.stat()
-    return _mounts(path, (stat.st_mtime_ns, stat.st_size))
+    found: dict[str, str] = {}
+    for path in (home() / "mounts.json", state_file()):  # (the installed ones last: they are current)
+        if path.exists():
+            stat = path.stat()
+            found.update(_mounts(path, (stat.st_mtime_ns, stat.st_size)))
+    return found
 
 
-@functools.lru_cache(maxsize=4)
+@functools.lru_cache(maxsize=8)
 def _mounts(path: Path, stamp: tuple[int, int]) -> dict[str, str]:
     state = json.loads(path.read_text())
+    if path.name == "mounts.json":
+        return state
     return {r["mount"]: r["origin"] for records in state.values() for r in records if "mount" in r}
 
 
@@ -91,11 +105,21 @@ def edit(path: Path, key: tuple[str, ...], value: Any) -> Any:
 def read(path: Path, key: tuple[str, ...]) -> Any:
     """The current value of one setting (None when unset)."""
 
+    if not key:
+        return path.read_text(encoding="utf-8") if path.exists() else None
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     return _apply(text, path.suffix, key, lambda previous: previous)[1]
 
 
 def _update(path: Path, key: tuple[str, ...], value: Callable[[Any], Any]) -> Any:
+    if not key:  # the whole file (a plugin Relay adds): its text, or None for no file
+        previous = path.read_text(encoding="utf-8") if path.exists() else None
+        if (new := value(previous)) is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(new, encoding="utf-8")
+        return previous
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     text, previous = _apply(text, path.suffix, key, value)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +154,7 @@ def _apply(text: str, suffix: str, key: tuple[str, ...], value: Callable[[Any], 
         if index is not None:
             previous = _scalar(lines.pop(index).split("=", 1)[1].strip(), "toml" if toml else "env")
         if (new := value(previous)) is not None:
-            line = f"{name} = {json.dumps(new)}" if toml else f"{name}={new}"
+            line = f"{name} = {_toml(new)}" if toml else f"{name}={new}"
             lines.insert(end if index is None else index, line)
         text = "\n".join(lines) + "\n"
     return text, previous
@@ -237,7 +261,7 @@ def _yaml_block(lines: list[str], key: tuple[str, ...], create: bool) -> tuple[i
                     return None
                 items = [_yaml_indent(lines[i]) for i in range(start, end) if lines[i].lstrip().startswith("- ")]
                 index = end
-                lines.insert(index, f"{' ' * (items[0] if items else max(column, 0))}- {name}: {wanted}")
+                lines.insert(index, f"{' ' * (items[0] if items else max(column, 0))}- {name}: {_yaml_scalar(wanted)}")
             column = _yaml_indent(lines[index])  # the item's keys start on the "- " line
             start, end = index, _yaml_end(lines, index, column)
             continue
@@ -297,6 +321,16 @@ def _toml_region(lines: list[str], table: list[str]) -> tuple[int, int]:
         lines += ["", header]
         return len(lines), len(lines)
     return start, next((i for i in headers if i >= start), len(lines))
+
+
+def _toml(value: Any) -> str:
+    """A value as TOML writes it on one line (JSON's spelling for scalars)."""
+
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{key} = {_toml(item)}" for key, item in value.items()) + " }"
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml(item) for item in value) + "]"
+    return json.dumps(value)
 
 
 def _scalar(raw: str, kind: str) -> Any:

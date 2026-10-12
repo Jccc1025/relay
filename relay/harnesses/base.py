@@ -8,12 +8,14 @@ harness's state is now (`state`), and where that state goes after a compaction (
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from ..core.ir import AGENT_KINDS, CONTEXT_KINDS, Item, Kind
-from ..install import Setting
+from ..install import Setting, read
 from ..prompts import SUMMARY_PREFIX
 from ..protocols.base import Codec, WireItem
 
@@ -122,6 +124,12 @@ class Harness:
         at = next(n for n in (last(Kind.USER), last(Kind.SUMMARY), len(head)) if n is not None)
         return (*system, *head[:at], *context, *head[at:])
 
+    def starter(self, command: str) -> list[Setting]:
+        """Settings that have the harness run `command` before a session's first model request
+        (`relay setup`: it makes sure Relay runs), where the harness runs such commands unasked."""
+
+        return []
+
     def settings(self) -> list[Setting]:
         """Config-file settings that point the harness at Relay (`relay install`)."""
 
@@ -131,3 +139,21 @@ class Harness:
         """Command line and environment that run the harness through Relay."""
 
         raise ValueError(f"Relay does not know how to launch the {self.name} harness")
+
+
+def command_hook(path: Path, event: str, command: str, timeout: int = 30) -> Setting:
+    """A command hook in Claude Code's format (`hooks.<event>` in a JSON settings file), after the
+    user's own; uninstalling puts the user's back as they were."""
+
+    hooks = read(path, ("hooks", event)) or []
+    return Setting(path, ("hooks", event), [*hooks, {"hooks": [{"type": "command", "command": command, "timeout": timeout}]}])
+
+
+PLUGINS = Path(__file__).resolve().parent.parent / "integrations" / "plugins"
+
+
+def plugin_file(path: Path, source: str, command: str) -> Setting:
+    """A plugin of Relay's (`relay/integrations/plugins/<source>`) written where the harness loads
+    its plugins, with `command` in it; uninstalling removes it."""
+
+    return Setting(path, (), (PLUGINS / source).read_text(encoding="utf-8").replace("__COMMAND__", json.dumps(command)))

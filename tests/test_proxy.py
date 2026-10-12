@@ -11,8 +11,8 @@ import httpx
 
 from relay import Compaction, Engine, PrefixStore, ProxyConfig, create_app
 from relay.prompts import SUMMARY_PREFIX
-from relay.transport import engine_from_env
-from tests.fakes import COMPACTION_MARKER, FakeUpstream, local_upstreams, serve
+from relay.transport import engine_from_settings
+from tests.fakes import COMPACTION_MARKER, FakeUpstream, local_upstreams, relay_settings, serve
 
 NEVER = Compaction(threshold=10**9)
 
@@ -135,10 +135,9 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual((anthropic["x-api-key"], "authorization" in anthropic), ("secret", False))
 
     def test_the_cache_settings_reach_the_engine_that_serves(self) -> None:
-        settings = {"RELAY_CACHE_MAX_ENTRIES": "50000", "RELAY_CACHE_MAX_BYTES": "1000000",
-                    "RELAY_CACHE_TTL_SECONDS": "86400", "RELAY_CACHE_PATH": "off"}  # (not in the user's home)
-        with unittest.mock.patch.dict(os.environ, settings):
-            store = engine_from_env().store
+        with relay_settings(cache_max_entries=50000, cache_max_bytes=1000000, cache_ttl_seconds=86400,
+                            cache_path="off"):  # (not in the user's home)
+            store = engine_from_settings().store
         self.assertEqual((store.max_entries, store.max_bytes, store.ttl_seconds), (50_000, 1_000_000, 86_400.0))
 
 

@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 from ..install import Setting
-from .base import REMINDER, Harness
+from .base import REMINDER, Harness, command_hook
 
 
 class WorkBuddy(Harness):
@@ -21,6 +21,10 @@ class WorkBuddy(Harness):
     # Memory and rules files, re-rendered in the first user message around its <user_query>.
     injected = (REMINDER, re.compile(r"<always_applied_workspace_rules>.*?</always_applied_workspace_rules>", re.S))
     config_env, config_dir = "WORKBUDDY_CONFIG_DIR", "~/.workbuddy"
+
+    def starter(self, command: str) -> list[Setting]:
+        user = Path(os.getenv(self.config_env) or self.config_dir).expanduser() / "settings.json"
+        return [command_hook(user, "SessionStart", command)]
 
     def settings(self) -> list[Setting]:
         config = Path(os.getenv(self.config_env) or self.config_dir).expanduser() / "models.json"

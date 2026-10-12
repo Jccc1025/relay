@@ -1,0 +1,4 @@
+name: relay-start
+version: "1"
+description: Relay running before every model request (relay setup hermes; relay uninstall hermes removes it).
+provides_hooks: [pre_api_request]

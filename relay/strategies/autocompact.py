@@ -36,8 +36,8 @@ class AutoCompact:
     name: str = "autocompact"
 
     @classmethod
-    def from_env(cls) -> AutoCompact:
-        return cls(Compaction.from_env())
+    def from_settings(cls) -> AutoCompact:
+        return cls(Compaction.from_settings())
 
     def fingerprint(self) -> dict[str, Any]:
         return {"name": self.name, "fallback": self.fallback.fingerprint(), "guidance": GUIDANCE, "prompt": PROMPT}

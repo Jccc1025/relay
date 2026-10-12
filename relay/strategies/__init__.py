@@ -11,7 +11,7 @@ from .selfcompact import SelfCompact
 
 STRATEGIES = {"compaction": Compaction, "clm": ContextLanguageModel, "folding": ContextFolding, "prolong": ProLong,
               "selfcompact": SelfCompact, "autocompact": AutoCompact, "acm": ACM, "mem1": MEM1, "rlm": RLM,
-              "rlm_persistent": PersistentRLM}  # RELAY_STRATEGY
+              "rlm_persistent": PersistentRLM}  # the `strategy` setting
 
 __all__ = ["ACM", "MEM1", "RLM", "STRATEGIES", "AutoCompact", "Compaction", "ContextFolding", "ContextLanguageModel",
            "PersistentRLM", "ProLong", "SelfCompact", "Strategy", "Summarizer"]

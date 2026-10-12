@@ -12,12 +12,14 @@ rejected with the protocol's context-overflow error.
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
 import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -262,3 +264,17 @@ def serve(app: Starlette) -> Iterator[str]:
         server.should_exit = True
         thread.join(timeout=10)
         listener.close()
+
+
+@contextmanager
+def relay_settings(**values: Any) -> Iterator[Path]:
+    """Relay's settings in a directory of their own, as `relay set` writes them."""
+
+    import tempfile
+    from unittest import mock
+
+    from relay import settings
+
+    with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"RELAY_HOME": home}):
+        settings.save(values)
+        yield Path(home)

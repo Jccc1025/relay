@@ -14,7 +14,6 @@ in place. ACM's prompts are used as released (`src/prompts.py`), its guidance wo
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -24,6 +23,7 @@ from ..core.ir import LABELS, Context, Item, Kind, Request
 from ..core.tokens import approx_tokens
 from .base import Summarizer
 from .conversation import responses, signal
+from .. import settings
 
 GUIDANCE = """## Context memory
 
@@ -113,8 +113,8 @@ class ACM:
     name: str = "acm"
 
     @classmethod
-    def from_env(cls) -> ACM:
-        return cls(os.getenv("RELAY_ACM_DIR", "/tmp/.acm"))
+    def from_settings(cls) -> ACM:
+        return cls(settings.value("acm_dir", "/tmp/.acm"))
 
     def fingerprint(self) -> dict[str, Any]:
         return {"name": self.name, "directory": self.directory, "guidance": GUIDANCE,

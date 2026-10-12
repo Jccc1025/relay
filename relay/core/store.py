@@ -7,8 +7,8 @@ carrying a value count toward the limits. Values are soft state: a miss is alway
 recoverable by recomputing from the request.
 
 The store can be kept on disk (`path`, with a fixed `secret`), so that a restarted Relay
-finds the contexts it had. Relay does this by default (`from_env`: ~/.relay/store-<port>.json,
-one per Relay process, with a secret it generates once and keeps beside it; RELAY_CACHE_PATH=off
+finds the contexts it had. Relay does this by default (`from_settings`: ~/.relay/store-<port>.json,
+one per Relay process, with a secret it generates once and keeps beside it; `relay set cache_path=off`
 keeps it in memory): a strategy's result is then not recomputed, and a result that cannot be
 recomputed (the edits a model made under CLM) is not lost. Only the keyed digests of the
 prefixes are written, never the items; values are written as they are stored (summaries and
@@ -34,6 +34,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any
+from .. import settings
 
 log = logging.getLogger("relay")
 FORMAT = 2  # 2: every node written once, with its parent (1 repeated every entry's whole path)
@@ -90,20 +91,20 @@ class PrefixStore:
                                  name="relay-store-writer").start()
 
     @classmethod
-    def from_env(cls) -> PrefixStore:
-        secret: str | bytes | None = os.getenv("RELAY_CACHE_SECRET")
-        ttl = float(os.getenv("RELAY_CACHE_TTL_SECONDS", str(6 * 60 * 60)))
-        default = os.path.join(os.path.expanduser("~"), ".relay", f"store-{os.getenv('RELAY_PORT', '8787')}.json")
-        path: str | None = os.getenv("RELAY_CACHE_PATH", default)  # (one file per Relay process: they do not share it)
+    def from_settings(cls) -> PrefixStore:
+        secret: str | bytes | None = settings.value("cache_secret")
+        ttl = float(settings.value("cache_ttl_seconds", str(6 * 60 * 60)))
+        default = os.path.join(os.path.expanduser("~"), ".relay", f"store-{settings.value('port', '8787')}.json")
+        path: str | None = settings.value("cache_path", default)  # (one file per Relay process: they do not share it)
         if path.strip().lower() in ("", "off", "none", "memory"):
             path = None
         if path is not None and not secret:
             secret = _kept_secret(f"{path}.secret")
             path = path if secret else None
         return cls(
-            max_entries=int(os.getenv("RELAY_CACHE_MAX_ENTRIES", "4096")),
-            max_bytes=int(os.getenv("RELAY_CACHE_MAX_BYTES", str(256 * 1024 * 1024))),
-            max_nodes=int(os.getenv("RELAY_CACHE_MAX_NODES", "200000")),
+            max_entries=int(settings.value("cache_max_entries", "4096")),
+            max_bytes=int(settings.value("cache_max_bytes", str(256 * 1024 * 1024))),
+            max_nodes=int(settings.value("cache_max_nodes", "200000")),
             ttl_seconds=ttl if ttl > 0 else None,
             secret=secret.encode() if isinstance(secret, str) else secret or None,
             path=path,

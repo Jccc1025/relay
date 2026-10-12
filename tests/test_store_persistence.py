@@ -1,4 +1,4 @@
-"""The prefix store kept on disk (RELAY_CACHE_PATH with RELAY_CACHE_SECRET): a restarted Relay
+"""The prefix store kept on disk (the `cache_path` and `cache_secret` settings): a restarted Relay
 finds the contexts it had. Off by default; a store without a fixed secret stays in memory."""
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from relay.core.store import FORMAT, PrefixStore
 from relay.harnesses import Harness
 from relay.protocols import OpenAIResponses
 from relay.strategies import Compaction, ContextLanguageModel
+from tests.fakes import relay_settings
 from tests.test_engine import Upstream, body, msg, step
 
 SECRET = b"s" * 32
@@ -138,29 +139,27 @@ class StoreOnDiskTests(unittest.TestCase):
 
     def test_by_default_relay_keeps_its_store_and_secret_in_the_home_folder(self) -> None:
         home = self.path.parent
-        with unittest.mock.patch.dict(os.environ, {"HOME": str(home)}):
-            for name in ("RELAY_CACHE_PATH", "RELAY_CACHE_SECRET", "RELAY_PORT"):
-                os.environ.pop(name, None)
-            store = PrefixStore.from_env()
+        with unittest.mock.patch.dict(os.environ, {"HOME": str(home)}), relay_settings():
+            store = PrefixStore.from_settings()
             partition = store.partition("t")
             store.put(partition, [b"a"], {"v": 1})
             store.flush()
             secret = home / ".relay" / "store-8787.json.secret"  # one store per Relay process, by its port
             self.assertEqual(secret.stat().st_mode & 0o777, 0o600)
             self.assertEqual((home / ".relay").stat().st_mode & 0o777, 0o700)
-            self.assertEqual(PrefixStore.from_env().match(partition, [b"a"]), (1, {"v": 1}))  # restarted
+            self.assertEqual(PrefixStore.from_settings().match(partition, [b"a"]), (1, {"v": 1}))  # restarted
 
     def test_off_keeps_the_store_in_memory(self) -> None:
         home = self.path.parent
-        with unittest.mock.patch.dict(os.environ, {"HOME": str(home), "RELAY_CACHE_PATH": "off"}):
-            store = PrefixStore.from_env()
+        with unittest.mock.patch.dict(os.environ, {"HOME": str(home)}), relay_settings(cache_path="off"):
+            store = PrefixStore.from_settings()
         store.put(store.partition("t"), [b"a"], {"v": 1})
         store.flush()
         self.assertEqual(list(home.iterdir()), [])
 
-    def test_from_env(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {"RELAY_CACHE_PATH": str(self.path), "RELAY_CACHE_SECRET": "k"}):
-            store = PrefixStore.from_env()
+    def test_from_settings(self) -> None:
+        with relay_settings(cache_path=str(self.path), cache_secret="k"):
+            store = PrefixStore.from_settings()
         store.put(store.partition("t"), [b"a"], {"v": 1})
         store.flush()
         self.assertTrue(self.path.exists())

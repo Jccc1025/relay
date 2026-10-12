@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from ..install import Setting, read
-from .base import Harness
+from .base import Harness, plugin_file
 
 DEFAULTS = {
     "openai-api": "https://api.openai.com/v1",
@@ -23,6 +23,16 @@ DEFAULTS = {
 
 class Hermes(Harness):
     name = "hermes"
+
+    def starter(self, command: str) -> list[Setting]:
+        """A plugin of Relay's in its user plugins, enabled (user plugins are opt-in)."""
+
+        home = Path(os.getenv("HERMES_HOME", "~/.hermes")).expanduser()
+        folder, config = home / "plugins" / "relay-start", home / "config.yaml"
+        enabled = read(config, ("plugins", "enabled")) or []
+        return [plugin_file(folder / "plugin.yaml", "hermes/relay-start/plugin.yaml", command),
+                plugin_file(folder / "__init__.py", "hermes/relay-start/__init__.py", command),
+                Setting(config, ("plugins", "enabled"), [*enabled, "relay-start"])]
 
     def settings(self) -> list[Setting]:
         config = Path(os.getenv("HERMES_HOME", "~/.hermes")).expanduser() / "config.yaml"

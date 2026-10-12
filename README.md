@@ -19,13 +19,30 @@ by the initial context, the most recent user messages, and the summary.
 
 ```bash
 pip install -e .
-relay serve &              # http://127.0.0.1:8787
-relay install codex        # or: claude, gemini_cli, pi, opencode, kilo, crush,
-                           #     openclaw, kimi_code, goose
-codex                      # use the harness exactly as before
-relay uninstall codex      # restore its configuration
-relay install claude --via hook   # Claude Code: its compaction hook instead of the proxy
+relay setup codex --strategy clm   # or: claude, gemini_cli, pi, opencode, kilo, crush,
+                                   #     openclaw, kimi_code, goose, hermes, nanobot, dsh, workbuddy, mini
+codex                              # use the harness exactly as before
+relay strategy folding             # another strategy, for every conversation from its next request
+relay status                       # whether Relay runs, its strategy, the harnesses set up
+relay uninstall codex              # restore its configuration
+relay stop                         # stop Relay and remove its service
+relay help                         # the guide, for people and for agents setting Relay up
 ```
+
+`relay setup` saves the settings, starts Relay as a process of its own (registered with nothing;
+`--autostart` makes it a systemd user unit or launchd agent instead), and once Relay answers,
+points the harness at it. Where the harness runs a command before its first model request (a
+session-start or prompt hook, an extension or a plugin: Claude Code, WorkBuddy, Gemini CLI, Kimi
+Code, pi, OpenCode, Kilo, Hermes), setup adds one that runs `relay start`, so
+Relay starts again whenever it is needed; the hook only keeps Relay running and never sees the
+conversation, which still goes through the proxy. A harness reads its configuration as a conversation starts: conversations
+started after `relay setup` go through Relay; one already open goes on as it was. Once a harness
+goes through Relay, a strategy changed with `relay strategy` applies to every conversation from
+its next request, with no restart. `relay uninstall` sends new conversations to the provider
+again, and Relay goes on forwarding the ones it served until `relay stop`. Nothing restarts the
+harness. (`tests/test_setup_e2e.py` plays this with the real Codex: a `codex exec` conversation
+and one open in the app server when `relay setup` runs, then `relay strategy`, `relay
+uninstall` and `relay stop`.)
 
 `relay install` edits the harness's own configuration file. It wraps whatever endpoint
 the harness is configured with (or its default): the setting becomes
@@ -86,6 +103,7 @@ Three layers keep strategies free of harness and protocol details:
 | `relay/core/ir.py` | The strategy contract: `Item` (kind, text, media), `Request` and `Context`. Items keep a reference to their wire item, so whatever a strategy keeps is forwarded byte-for-byte. |
 | `relay/protocols/` | One codec per wire protocol (OpenAI Responses, OpenAI Chat Completions, Anthropic Messages, Gemini): item kinds and text, legal cut points (never between a tool call and its result), prefix canonicalization, synthetic messages, summary requests, usage and overflow errors. |
 | `relay/harnesses/` | Harness profiles: injected context, conversation identity, current state and its placement, the harness's own compaction requests, detection from request headers, and the settings `relay install` writes. |
+| `relay/settings.py`, `relay/service.py`, `relay/cli.py` | Relay's settings file (`relay set`, `relay strategy`), which a running Relay follows; Relay as a service of the user's (`relay setup`, `relay stop`); the command line and its guide (`relay/HELP.md`, `relay help`). |
 | `relay/install.py` | `relay install` / `uninstall`: reversible edits of JSON, TOML, YAML and `.env` config files, and the endpoint mounts Relay forwards. |
 | `relay/strategies/` | Strategies. `compaction.py` ports Codex's local compaction; `clm.py` lets the model edit its own context (Context Language Models); `folding.py` folds the branches an agent returns from (Context Folding); `prolong.py` keeps a session log the agent searches (PRO-LONG). |
 | `relay/core/engine.py` | Per-request orchestration: restore the stored context, estimate tokens, ask the strategy, place the harness's own items, check the result, remember. It records each request's cache decision (matched depth) and warns when a request no longer reaches its conversation's last stored context, with the item where it diverged. Strategy failures never reach the harness; the request is forwarded with the last good context. |
@@ -173,8 +191,8 @@ request as too long, Relay compacts and retries it once.
 Behavior follows `codex-rs/core/src/compact.rs`; prompts are vendored verbatim in
 `relay/prompts/`.
 
-- Compaction triggers at 90% of the model's context window (`RELAY_COMPACT_THRESHOLD` or
-  `RELAY_COMPACT_GROWTH` override this), and always at 95% of the window.
+- Compaction triggers at 90% of the model's context window (`compact_threshold` or
+  `compact_growth` override this), and always at 95% of the window.
 - The summary request is the harness's own request with the history so far and
   Codex's compaction prompt as the last user message, sent to the same upstream (with
   tools disabled). It shares the previous request's prefix, so provider prompt caching
@@ -186,7 +204,7 @@ Behavior follows `codex-rs/core/src/compact.rs`; prompts are vendored verbatim i
   piece after the summary so far: the skipped compactions, caught up. The same happens if
   the upstream reports an overflow.
 - The new context follows Codex's replacement history: the newest real user messages up
-  to `RELAY_RETAIN_USER_TOKENS` (the oldest one kept is truncated in the middle; media is
+  to `retain_user_tokens` (the oldest one kept is truncated in the middle; media is
   reduced to text; earlier summaries are dropped) and the summary as a user message
   starting with Codex's summary prefix. Mid-turn (the request ends with tool results)
   everything is summarized and the summary comes last; at the start of a turn the summary
@@ -225,7 +243,7 @@ parent's history (Codex `fork_turns`) extends the parent's prefix and so starts 
 parent's compaction.
 
 Deliberate differences from Codex: a compaction that would free less than
-`RELAY_COMPACT_MIN_GAIN` of the threshold is skipped, so a threshold set close to the
+`compact_min_gain` of the threshold is skipped, so a threshold set close to the
 fixed prompt overhead (system prompt and tools) does not trigger a summary on every
 request; the summary request keeps the tool definitions with tool calls disabled
 (Anthropic rejects tool history without them) where Codex sends none; a history too long
@@ -234,7 +252,7 @@ and an empty summary is a failed compaction rather than "(no summary available)"
 
 ## Context Language Models
 
-`RELAY_STRATEGY=clm` lets the model manage its own context, as in
+`relay strategy clm` lets the model manage its own context, as in
 [Context Language Models](https://arxiv.org/abs/2609.37725) (`relay/strategies/clm.py`). Before
 every request the conversation is mirrored to a file; the model edits it with its ordinary tools
 (a Python one-liner, `sed`, its file-edit tool); on the next request the edited file is its
@@ -280,7 +298,7 @@ passed for Codex (7 edits over 27 requests) and Claude Code (6 over 21): the mod
 shortened old tool results in place, their calls still structured calls.
 
 **Steering.** As in the paper (§5.2), a policy in words changes how the model manages its
-context: `RELAY_CLM_STEERING` adds one to the guidance. `tests/docker/steering/` holds briefs that
+context: `clm_steering` adds one to the guidance. `tests/docker/steering/` holds briefs that
 imitate other strategies, and `check.py --strategy clm --steering NAME` checks each accepted edit
 against the shape the brief asks for. On the file-reading task, with nudges off (backup with
 them on), the edits that followed their brief, for Codex / Claude Code / pi:
@@ -301,13 +319,13 @@ they answered with codes they made up. pi edited least, and late.
 Limits: Relay must run on the machine whose files the harness's tools edit (the paper's sandbox
 mirror); the edit is read back at the next request, so the turn that made it stays in the context
 until the model removes it (as in pi-clm); revisions live in Relay's store, which is kept on disk
-(`RELAY_CACHE_PATH`), so a restarted Relay keeps them while the harness resends the history they
+(`cache_path`), so a restarted Relay keeps them while the harness resends the history they
 were made on (in memory only, a restart returns the model to its raw history); through Claude
 Code's hook the instructions and notes cannot be delivered, so CLM runs through the proxy.
 
 ## Context Folding
 
-`RELAY_STRATEGY=folding` lets the agent branch off a sub-task and come back with a message, as in
+`relay strategy folding` lets the agent branch off a sub-task and come back with a message, as in
 FoldAgent ([github.com/sunnweiwei/FoldAgent](https://github.com/sunnweiwei/FoldAgent),
 `relay/strategies/folding.py`). The harness's own shell stands in for FoldAgent's `branch` and
 `return` tools: the guidance asks the agent to run `echo "[branch] <description> :: <task>"`, work on
@@ -332,14 +350,14 @@ form a harness reports it (plain, JSON, `Command: … Output: …`), else from t
 
 ## PRO-LONG
 
-`RELAY_STRATEGY=prolong` gives the agent durable memory, as PRO-LONG does
+`relay strategy prolong` gives the agent durable memory, as PRO-LONG does
 ([github.com/alexisfox7/PRO-LONG](https://github.com/alexisfox7/PRO-LONG), `relay/strategies/prolong.py`):
 every event of the session (user prompts, the agent's messages, tool calls and results) is appended
-to one local log (`RELAY_PROLONG_LOG`, PRO-LONG's JSONL format), and PRO-LONG's skill tells the agent
+to one local log (`prolong_log`, PRO-LONG's JSONL format), and PRO-LONG's skill tells the agent
 to search only what it needs there with `rg`, `grep`, `jq` or a script. The log never enters the
 prompt, and reading it is not recorded. PRO-LONG writes the log from each harness's hooks; Relay
 writes it from the requests, so it works in every harness. It matters once the context loses
-something, so it runs around compaction (the `RELAY_COMPACT_*` settings apply): compaction decides
+something, so it runs around compaction (the `compact_*` settings apply): compaction decides
 what the model sees, the log keeps everything.
 
 Checked in Docker with `check.py --strategy prolong`: each file also names an animal, which turn 1
@@ -362,12 +380,12 @@ schedule the harness keeps. Each is a strategy here, in every harness (`relay/st
 method gives the model a tool, the harness's own shell stands in for it, as for Context Folding: the
 guidance asks the agent to `echo` a signal, and the echo's result is rewritten in place.
 
-| Baseline | `RELAY_STRATEGY` | What Relay does | Prompts |
+| Baseline | `strategy` | What Relay does | Prompts |
 | --- | --- | --- | --- |
-| Summary | `compaction` with `RELAY_COMPACT_RATIO=0.75` | Codex's compaction at 75% of the budget (the paper's summary harness) | Codex's |
+| Summary | `compaction` with `relay set compact_ratio=0.75` | Codex's compaction at 75% of the budget (the paper's summary harness) | Codex's |
 | Self-Compact ([arXiv 2606.23525](https://arxiv.org/abs/2606.23525)) | `selfcompact` | every two model responses once the prompt passes 37% of the window, appends the rubric to the conversation (prompt cache reused); C1 = C2 = C3 = Y and N1 = N fires the summarizer, and the summary replaces the trajectory (the user's messages stay); past 95% it summarizes without asking | the paper's rubric and summarizer, verbatim |
-| AutoCompact ([autocompact.github.io](https://autocompact.github.io/)) | `autocompact` | the agent runs `echo "[compact]"` at a phase transition; the same model writes an "# Auto Context Summary", which answers the call, and the context becomes the user's messages, the turn before the call and the summary; Codex's compaction stays as the fallback (`RELAY_COMPACT_*`) | none released; written from its description |
-| ACM ([github](https://github.com/lixiaochuan2020/agentic-context-management)) | `acm` | `echo "[manage_context]"` compresses everything since the previous call into "[summary_id: N] ...", the originals saved to `RELAY_ACM_DIR/<conversation>/summary_N.json`; `echo "[query_memory] N :: query"` answers from them; every request after a tool result ends with "[CURRENT CONTEXT TOKEN: N]" | ACM's summarizer and recall prompts, verbatim; its guidance worded for a shell |
+| AutoCompact ([autocompact.github.io](https://autocompact.github.io/)) | `autocompact` | the agent runs `echo "[compact]"` at a phase transition; the same model writes an "# Auto Context Summary", which answers the call, and the context becomes the user's messages, the turn before the call and the summary; Codex's compaction stays as the fallback (`compact_*`) | none released; written from its description |
+| ACM ([github](https://github.com/lixiaochuan2020/agentic-context-management)) | `acm` | `echo "[manage_context]"` compresses everything since the previous call into "[summary_id: N] ...", the originals saved to `acm_dir/<conversation>/summary_N.json`; `echo "[query_memory] N :: query"` answers from them; every request after a tool result ends with "[CURRENT CONTEXT TOKEN: N]" | ACM's summarizer and recall prompts, verbatim; its guidance worded for a shell |
 | MEM1 ([github](https://github.com/MIT-MI/MEM1)) | `mem1` | the model writes its internal state in `<IS>` every response; the context is cut back to the newest response holding one (the user's messages stay) | MEM1's, for an agent's tools |
 | RLM ([github](https://github.com/alexzhang13/rlm)) | `rlm`, `rlm_persistent` | before every step the authors' RLM works out the agent's next step, the conversation held as `context` in its REPL; its answer is all the task's model sees of the conversation, and that model, with the harness's tools, takes the step. `rlm` is a fresh query every request (the whole conversation again, nothing cached); `rlm_persistent` is the authors' multi-turn mode: the conversation's REPL stays, each request adds only what is new as `context_k`, and earlier work stays in `history_k` and in the model's variables | the authors' (`rlms` 0.1.3); the root prompt asks for the next step |
 | Context Folding | `folding` | see above | FoldAgent's |
@@ -380,7 +398,7 @@ The RLM runs inside Relay (`pip install 'relay[rlm]'`; `relay/strategies/rlm.py`
 it makes, the root's and the sub-calls', goes to the task's own model through the harness's
 upstream and credentials, with the RLM's instructions and no tools (`Summarizer.complete`). Its
 `local` environment runs the model's code in Relay's process, so it can read and change whatever
-Relay can (in the tests Gemini read the project's files itself); `RELAY_RLM_ENVIRONMENT=docker`
+Relay can (in the tests Gemini read the project's files itself); `relay set rlm_environment=docker`
 uses the authors' Docker environment. It cannot run through Claude Code's hook, which can only continue
 the harness's own conversation. Through the Responses API, gpt-6 writes its plan and its code as
 commentary before a final answer, and repeats it at times: the RLM gets every message once, which it
@@ -428,42 +446,48 @@ Gemini was overloaded during much of it, answering 503s; failed pairs were run a
 
 ## Configuration
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `RELAY_STRATEGY` | `compaction` | The strategy: `compaction` (Codex's), `clm` (the model edits its own context), `folding` (the agent branches and returns), `prolong` (compaction, and a log the agent searches), or one of the CLM paper's baselines: `selfcompact`, `autocompact`, `acm`, `mem1`, `rlm`, `rlm_persistent`. |
-| `RELAY_RLM_MAX_ITERATIONS`, `RELAY_RLM_MAX_DEPTH` | `30`, `1` | RLM: root turns per step, and recursion depth (1: sub-calls are plain model calls), the authors' defaults. |
-| `RELAY_RLM_ENVIRONMENT` | `local` | RLM: where the model's code runs; `local` is Relay's own process. |
-| `RELAY_ACM_DIR` | `/tmp/.acm` | ACM: where the compressed messages are saved, a folder per conversation (Relay reads them back for `query_memory`). |
-| `RELAY_PROLONG_LOG` | `/tmp/.prolong/log.jsonl` | PRO-LONG: the session log; the harness's tools must be able to read it (Relay writes a `.gitignore` next to it). |
-| `RELAY_COMPACT_THRESHOLD` | `RELAY_COMPACT_RATIO` × context window | Prompt tokens that trigger compaction. |
-| `RELAY_COMPACT_RATIO` | `0.9` | Share of the model's context window used when no threshold is set. |
-| `RELAY_COMPACT_GROWTH` | unset | Instead of a threshold, compact after this many tokens were added since the context window began (Codex's `BodyAfterPrefix` scope); independent of each harness's fixed prompt overhead. |
-| `RELAY_CONTEXT_WINDOW` | from the model name | Overrides the context window table in `relay/providers.py`. |
-| `RELAY_RETAIN_USER_TOKENS` | `20000` | Budget for recent user messages kept verbatim. |
-| `RELAY_CLM_BUDGET` | context window | CLM: the context budget the model is told about; its limit is this less `RELAY_CLM_RESERVE` (`2048`). |
-| `RELAY_CLM_DIR` | `/tmp/.live_ctx` | CLM: where the context files live; the harness's tools must be able to edit files there (inside the workspace for a sandboxed harness; Relay writes a `.gitignore` there). |
-| `RELAY_CLM_STEERING` | unset | CLM: a file holding a context-management policy in words, added to the model's guidance (see `tests/docker/steering/`). |
-| `RELAY_CLM_NUDGES` | `on` | CLM: `off` drops the budget nudges (the size readout stays), as in the paper's steering runs. |
-| `RELAY_COMPACT_MIN_GAIN` | `0.1` | Skip compactions that free less than this share of the threshold (or growth). |
-| `RELAY_OPENAI_BASE_URL` | `https://api.openai.com/v1` | Upstream for the Responses API. |
-| `RELAY_ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Upstream for the Messages API. |
-| `RELAY_OPENAI_API_KEY`, `RELAY_ANTHROPIC_API_KEY` | unset | Replace the harness's credentials for that upstream. |
-| `RELAY_HARNESS` | detected | Force a harness profile by name, e.g. `codex`, `hermes`, `generic`. |
-| `RELAY_EVENT_LOG` | unset | Append one JSON line per compaction (sizes, timing, the new head). |
-| `RELAY_HOST`, `RELAY_PORT` | `127.0.0.1`, `8787` | Server address for `relay serve`. |
-| `RELAY_CACHE_MAX_ENTRIES`, `RELAY_CACHE_MAX_BYTES`, `RELAY_CACHE_TTL_SECONDS`, `RELAY_CACHE_SECRET` | `4096`, 256 MiB, 6 h, random | Limits of the prefix store. |
-| `RELAY_CACHE_PATH` | `~/.relay/store-<port>.json` | Where the prefix store is kept (one file per Relay process; written in the background, at most once a second, and on shutdown), so a restarted Relay finds its contexts: compactions are not recomputed and CLM edits are not lost (`off`: in memory only). The file holds summaries and strategy state (conversation text), readable by its owner only; without `RELAY_CACHE_SECRET`, a secret is generated once and kept beside it. |
+Relay's settings live in `~/.config/relay/settings.json`, written by `relay setup`, `relay strategy`
+and `relay set name=value` (`relay settings` shows them, `relay unset name` restores a default,
+`relay help` is the guide). A running Relay applies a changed strategy, and the settings of the
+strategies, from the next request; where it listens, its upstreams and its store apply when it
+starts, and `relay set` restarts the service for them.
 
-Set `RELAY_CONTEXT_WINDOW` to the window the harness itself uses (Codex's catalog gives the
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `strategy` | `compaction` | The strategy: `compaction` (Codex's), `clm` (the model edits its own context), `folding` (the agent branches and returns), `prolong` (compaction, and a log the agent searches), or one of the CLM paper's baselines: `selfcompact`, `autocompact`, `acm`, `mem1`, `rlm`, `rlm_persistent`. |
+| `rlm_max_iterations`, `rlm_max_depth` | `30`, `1` | RLM: root turns per step, and recursion depth (1: sub-calls are plain model calls), the authors' defaults. |
+| `rlm_environment` | `local` | RLM: where the model's code runs; `local` is Relay's own process. |
+| `acm_dir` | `/tmp/.acm` | ACM: where the compressed messages are saved, a folder per conversation (Relay reads them back for `query_memory`). |
+| `prolong_log` | `/tmp/.prolong/log.jsonl` | PRO-LONG: the session log; the harness's tools must be able to read it (Relay writes a `.gitignore` next to it). |
+| `compact_threshold` | `compact_ratio` × context window | Prompt tokens that trigger compaction. |
+| `compact_ratio` | `0.9` | Share of the model's context window used when no threshold is set. |
+| `compact_growth` | unset | Instead of a threshold, compact after this many tokens were added since the context window began (Codex's `BodyAfterPrefix` scope); independent of each harness's fixed prompt overhead. |
+| `context_window` | from the model name | Overrides the context window table in `relay/providers.py`. |
+| `retain_user_tokens` | `20000` | Budget for recent user messages kept verbatim. |
+| `clm_budget` | context window | CLM: the context budget the model is told about; its limit is this less `clm_reserve` (`2048`). |
+| `clm_dir` | `/tmp/.live_ctx` | CLM: where the context files live; the harness's tools must be able to edit files there (inside the workspace for a sandboxed harness; Relay writes a `.gitignore` there). |
+| `clm_steering` | unset | CLM: a file holding a context-management policy in words, added to the model's guidance (see `tests/docker/steering/`). |
+| `clm_nudges` | `on` | CLM: `off` drops the budget nudges (the size readout stays), as in the paper's steering runs. |
+| `compact_min_gain` | `0.1` | Skip compactions that free less than this share of the threshold (or growth). |
+| `openai_base_url` | `https://api.openai.com/v1` | Upstream for the Responses API. |
+| `anthropic_base_url` | `https://api.anthropic.com` | Upstream for the Messages API. |
+| `openai_api_key`, `anthropic_api_key` | unset | Replace the harness's credentials for that upstream. |
+| `harness` | detected | Force a harness profile by name, e.g. `codex`, `hermes`, `generic`. |
+| `event_log` | unset | Append one JSON line per compaction (sizes, timing, the new head). |
+| `host`, `port` | `127.0.0.1`, `8787` | Server address for `relay serve`. |
+| `cache_max_entries`, `cache_max_bytes`, `cache_ttl_seconds`, `cache_secret` | `4096`, 256 MiB, 6 h, random | Limits of the prefix store. |
+| `cache_path` | `~/.relay/store-<port>.json` | Where the prefix store is kept (one file per Relay process; written in the background, at most once a second, and on shutdown), so a restarted Relay finds its contexts: compactions are not recomputed and CLM edits are not lost (`off`: in memory only). The file holds summaries and strategy state (conversation text), readable by its owner only; without `cache_secret`, a secret is generated once and kept beside it. |
+
+Set `context_window` to the window the harness itself uses (Codex's catalog gives the
 gpt-5.6 and gpt-6 families 272k by default, shown as 258k usable): the table covers older
 models only, an unknown model falls back to 128k, and the 95% limit uses the same window, so
 setting only a threshold is not enough. Relay's threshold must also stay below the
 harness's own trigger (see [Harness auto-compaction](#harness-auto-compaction)).
 
 Other providers are configured by endpoint, for example
-`RELAY_OPENAI_BASE_URL=https://api.x.ai/v1` for Grok, or
-`RELAY_OPENAI_BASE_URL=https://openrouter.ai/api/v1` /
-`RELAY_ANTHROPIC_BASE_URL=https://openrouter.ai/api` with the matching `*_API_KEY` for
+`relay set openai_base_url=https://api.x.ai/v1` for Grok, or
+`relay set openai_base_url=https://openrouter.ai/api/v1` /
+`relay set anthropic_base_url=https://openrouter.ai/api` with the matching `openai_api_key` / `anthropic_api_key` for
 OpenRouter.
 
 ## Support
@@ -633,7 +657,7 @@ Codex's history grew to 34k, the usage it was told stayed under 22k, and it neve
 itself (in `codex exec` and under Remote Control); with Relay not compacting, it did.
 
 Known limitations: a restart finds the stored contexts again only when the store is kept on disk
-(the default, `RELAY_CACHE_PATH`), otherwise it costs a catch-up summary per conversation;
+(the default, `cache_path`), otherwise it costs a catch-up summary per conversation;
 WebSocket transports are refused (Codex falls back to HTTP); an overflow reported inside an
 already-started stream is not retried; token-counting endpoints are
 passed through unchanged; Gemini CLI's Google-login mode (Code Assist API) is not
@@ -663,7 +687,7 @@ covered yet.
   harness's state goes where the harness puts it after its own). Add `state` for the next
   request and `notes` for this one only. `summarizer.summarize(cut, prompt)` asks the task's
   own model about `current[:cut]`; `summarizer.complete(items)` asks it anything else, with
-  instructions of its own and no tools. Register it in `STRATEGIES` (`RELAY_STRATEGY`). To give the
+  instructions of its own and no tools. Register it in `STRATEGIES` (`strategy`). To give the
   model an action without a new tool, have it echo a signal through the harness's shell and rewrite
   the echo's result (`relay/strategies/conversation.py`, as Context Folding, AutoCompact and ACM do).
 
