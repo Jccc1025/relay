@@ -1,11 +1,12 @@
 """A harness sets Relay up for itself, told in a sentence, then uses it session after session.
 
-    RELAY_TEST_KEYS=keys.env python tests/docker/self_setup.py codex:gpt [claude_code:gpt ...]
+    RELAY_TEST_KEYS=keys.env python tests/docker/self_setup.py codex:gpt [claude_code:gpt ...] [--ref BRANCH]
 
-In the image, on a user's machine with one harness and nothing of Relay's (only a checkout at
-/relay to install from; something else listens on Relay's default port):
+In the image, on a user's machine with one harness and nothing of Relay's (something else listens on
+Relay's default port):
 
-1. session 1: the harness is asked to install Relay with its installer and set it up for itself;
+1. session 1: the harness is asked to install Relay with its installer, from GitHub (`--ref`, as
+   `relay help` gives it) or from the checkout at /relay, and to set it up for itself;
 2. Relay's thresholds are lowered, as a user tuning it would (`relay set`);
 3. session 2: a task under compaction, the strategy setup chose;
 4. session 3: the harness is asked to switch Relay to CLM;
@@ -28,19 +29,21 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from check import CODES, SPECS, container  # noqa: E402
+from check import CODES, RULES, SPECS, container  # noqa: E402
 
 RELAY = "~/.local/bin/relay"
-INSTALL = ("Install Relay for yourself, {harness}: run `sh /relay/install.sh /relay` (a local checkout), then set it "
-           "up for {harness} with `relay setup`; `relay help` explains it. Reply with what you did.")
+INSTALL = ("Install Relay for yourself, {harness}: run `{install}`, then set it up for {harness} with `relay setup`; "
+           "`relay help` explains it. Reply with what you did.")
+CHECKOUT = "sh /relay/install.sh /relay"
+GITHUB = ("curl -fsSL https://raw.githubusercontent.com/sunnweiwei/relay/{ref}/install.sh | "
+          "sh -s -- git+https://github.com/sunnweiwei/relay.git@{ref}")
 SWITCH = "Switch Relay to the clm strategy (`relay help` says how). Reply with what you did."
-TASK = ("[{tag}] Read file_1.txt to file_4.txt in the current directory one after another, in full (for example "
-        "`cat file_1.txt`). Each ends with a line starting with 'CODE:'. Reply with their 4 codes in order, "
-        "comma-separated, and nothing else.")
+TASK = "[{tag}] Read the files file_1.txt to file_4.txt in the current directory, " + RULES + (
+    " After reading them, reply with their 4 codes in order, comma-separated, and nothing else.")
 MARKS = {"clm": "## Managing your context", "folding": "## Branches (context folding)"}
 
 
-def run(name: str) -> dict:
+def run(name: str, ref: str | None = None) -> dict:
     harness, spec = name.split(":")[0], SPECS[name]
     root = Path(tempfile.mkdtemp(prefix=f"relay-self-setup-{harness}-"))
     (root / "home").mkdir()
@@ -55,8 +58,8 @@ def run(name: str) -> dict:
 
     turns = "\n".join([
         "(python3 -m http.server 8787 --bind 127.0.0.1 > /dev/null 2>&1 &) && sleep 1",  # (not Relay)
-        session(1, INSTALL.format(harness=harness)),
-        f"{RELAY} status > ~/status.out 2>&1; {RELAY} set compact_growth=5000 compact_min_gain=0 >> ~/status.out 2>&1",
+        session(1, INSTALL.format(harness=harness, install=GITHUB.format(ref=ref) if ref else CHECKOUT)),
+        f"{RELAY} status > ~/status.out 2>&1; {RELAY} set compact_growth=3000 compact_min_gain=0 >> ~/status.out 2>&1",
         session(2, TASK.format(tag="compaction")),
         session(3, SWITCH),
         f"{RELAY} strategy >> ~/status.out 2>&1",
@@ -103,7 +106,9 @@ def run(name: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("names", nargs="+", choices=list(SPECS))
-    results = [run(name) for name in parser.parse_args().names]
+    parser.add_argument("--ref", help="install from this branch or tag on GitHub (default: the checkout at /relay)")
+    options = parser.parse_args()
+    results = [run(name, options.ref) for name in options.names]
     for r in results:
         print(f"== {r['name']} sets Relay up and uses it: {'PASS' if r['passed'] else 'FAIL'}  ({r['home']})")
         print(f"  port: {r['port']}; it said: {r['said']!r}")
