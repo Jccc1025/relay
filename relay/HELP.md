@@ -90,7 +90,9 @@ history as the harness has it. Switching back finds the earlier strategy's conte
    If your harness's sandbox or command policy refuses the installer or `relay`, and asking the
    user to approve is not possible (some refuse in headless runs, as DeepSeek Harness's sandbox
    and Gemini CLI's command checker did in our tests), tell the user to run the installer and
-   `relay setup` in a terminal.
+   `relay setup` in a terminal. Do the same if Relay stops as soon as your command ends.
+   OpenClaw ends every process a command started; there, `relay setup --autostart` in a
+   terminal keeps Relay running.
 3. Run `relay status` and check that it reports the strategy.
 4. Tell the user that the strategy applies to conversations started from now on, and that
    this one goes on as before. If Relay was already set up, the change applies from the next
