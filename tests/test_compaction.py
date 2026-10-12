@@ -87,6 +87,13 @@ class CompactionTests(unittest.TestCase):
         self.assertEqual(Compaction(threshold=7).limit(200_000), 7)
         self.assertEqual(Compaction(ratio=0.5).limit(None), 64_000)
 
+    def test_the_gpt_6_family_has_codexs_window(self) -> None:
+        from relay.providers import context_window
+
+        for model in ("gpt-6-luna", "gpt-6.1-sol", "openai/gpt-6"):
+            self.assertEqual(context_window(model), 272_000)
+        self.assertEqual(Compaction().limit(context_window("gpt-6-luna")), 244_800)  # Codex: 90% of 272k
+
 
 class GrowthTests(unittest.TestCase):
     def test_growth_counts_tokens_added_since_the_window_began(self) -> None:

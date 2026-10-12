@@ -478,10 +478,10 @@ starts, and `relay set` restarts the service for them.
 | `cache_max_entries`, `cache_max_bytes`, `cache_ttl_seconds`, `cache_secret` | `4096`, 256 MiB, 6 h, random | Limits of the prefix store. |
 | `cache_path` | `~/.relay/store-<port>.json` | Where the prefix store is kept (one file per Relay process; written in the background, at most once a second, and on shutdown), so a restarted Relay finds its contexts: compactions are not recomputed and CLM edits are not lost (`off`: in memory only). The file holds summaries and strategy state (conversation text), readable by its owner only; without `cache_secret`, a secret is generated once and kept beside it. |
 
-Set `context_window` to the window the harness itself uses (Codex's catalog gives the
-gpt-5.6 and gpt-6 families 272k by default, shown as 258k usable): the table covers older
-models only, an unknown model falls back to 128k, and the 95% limit uses the same window, so
-setting only a threshold is not enough. Relay's threshold must also stay below the
+Set `context_window` to the window the harness itself uses where the table in
+`relay/providers.py` does not know the model: it gives the gpt-5 and gpt-6 families Codex's 272k
+(shown as 258k usable), an unknown model falls back to 128k, and the 95% limit uses the same
+window, so setting only a threshold is not enough. Relay's threshold must also stay below the
 harness's own trigger (see [Harness auto-compaction](#harness-auto-compaction)).
 
 Other providers are configured by endpoint, for example
