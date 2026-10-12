@@ -27,6 +27,7 @@ _DROPPED_HEADERS = {
 # (model-name prefix, context window in tokens); the first match wins. Vendor prefixes
 # such as "openai/" or "anthropic/" (OpenRouter) are ignored.
 CONTEXT_WINDOWS = (
+    ("gpt-6", 272_000),  # Codex's catalog: 272k, of which it uses 95% (as Relay's hard limit does)
     ("gpt-5", 272_000),
     ("gpt-4.1", 1_047_576),
     ("gpt-4o", 128_000),
