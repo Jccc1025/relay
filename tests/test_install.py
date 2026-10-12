@@ -55,6 +55,13 @@ class InstallTests(unittest.TestCase):
         # A conversation the harness started through Relay goes on through it: Relay still forwards.
         self.assertEqual(install.mounts()["/up/h-1"], "https://api.kimi.com")
 
+    def test_a_yaml_list_item_named_with_a_reserved_character_is_quoted(self) -> None:
+        path = self.root / "patch.yml"
+        path.write_text("- id: a\n  config:\n    x: 1\n")
+        install.edit(path, ("[name=@scope/plugin]", "config", "path"), "/p")
+        self.assertIn('- name: "@scope/plugin"\n', path.read_text())
+        self.assertEqual(install.read(path, ("[name=@scope/plugin]", "config", "path")), "/p")
+
     def test_harness_auto_compaction_is_turned_off_and_restored(self) -> None:
         """Relay compacts instead: each harness's own trigger is switched off (or set beyond reach)
         in its own format, next to what the user had, and uninstall puts it back."""

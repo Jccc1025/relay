@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 
 from ..core.ir import Item
-from ..install import Setting
+from ..install import Setting, read
 from .base import NEVER, Harness
 
 DEFAULT_CONTEXT = 262_144  # Kimi Code's max_context_size where a model names none
@@ -31,6 +31,16 @@ class KimiCode(Harness):
         if " mode is active" in item.text:
             return "mode"
         return None
+
+    def starter(self, command: str) -> list[Setting]:
+        """A hook as each prompt is submitted, which Kimi Code waits for before its request; after the
+        user's inline `hooks = [...]` (tables of them, `[[hooks]]`, are left alone)."""
+
+        config = Path(os.getenv("KIMI_CODE_HOME", "~/.kimi-code")).expanduser() / "config.toml"
+        if config.exists() and "[[hooks]]" in config.read_text(encoding="utf-8"):
+            return []
+        hooks = read(config, ("hooks",)) or []
+        return [Setting(config, ("hooks",), [*hooks, {"event": "UserPromptSubmit", "command": command, "timeout": 30}])]
 
     def settings(self) -> list[Setting]:
         config = Path(os.getenv("KIMI_CODE_HOME", "~/.kimi-code")).expanduser() / "config.toml"

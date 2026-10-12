@@ -1,12 +1,13 @@
 """Relay command line (`relay help` for the guide).
 
-  relay setup <harness> [--strategy S] [--set name=value ...]
-                                    save the settings, start Relay as a service, point the harness at it
+  relay setup <harness> [--strategy S] [--set name=value ...] [--autostart]
+                                    save the settings, start Relay, point the harness at it
   relay strategy [S] [--set ...]    show or change the strategy; the running Relay follows at once
   relay settings | set name=value ... | unset name ...
   relay status                      whether Relay runs, its strategy, the harnesses set up
   relay uninstall <harness>         restore the harness's config
-  relay stop                        stop Relay and remove its service
+  relay start                       make sure Relay runs (harness hooks run it as a session starts)
+  relay stop                        stop Relay (and remove its service)
   relay serve                       run Relay in the foreground (what the service runs)
   relay install <harness> [--via]   only point a harness at Relay (through the proxy, or a hook)
   relay run <harness> [args...]     run a harness through a private proxy
@@ -46,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="relay", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command")
     harnesses = sorted({*HARNESSES, *ALIASES} - {"generic"})
-    setup = commands.add_parser("setup", help="save the settings, start Relay as a service, point a harness at it")
+    setup = commands.add_parser("setup", help="save the settings, start Relay, point a harness at it")
     setup.add_argument("harness", choices=harnesses)
     strategy = commands.add_parser("strategy", help="show or change the strategy")
     strategy.add_argument("name", nargs="?", choices=sorted(STRATEGIES))
@@ -55,13 +56,16 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--strategy", choices=sorted(STRATEGIES))
     setup.add_argument("--via", choices=["auto", "proxy", "hook"], default="auto",
                        help="integration path (default: the harness's preferred one)")
+    setup.add_argument("--autostart", action="store_true",
+                       help="register Relay with the system's service manager (start at login, restart if it exits)")
     commands.add_parser("settings", help="every setting written")
     assign = commands.add_parser("set", help="change settings")
     assign.add_argument("assignments", nargs="+", metavar="NAME=VALUE")
     unset = commands.add_parser("unset", help="return settings to their defaults")
     unset.add_argument("names", nargs="+", metavar="NAME")
     commands.add_parser("status", help="whether Relay runs, its strategy, the harnesses set up")
-    commands.add_parser("stop", help="stop Relay and remove its service")
+    commands.add_parser("start", help="make sure Relay runs")
+    commands.add_parser("stop", help="stop Relay (and remove its service)")
     commands.add_parser("help", help="the guide")
     serve = commands.add_parser("serve", help="run Relay in the foreground")
     serve.add_argument("--host")
@@ -85,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             print(GUIDE.read_text(encoding="utf-8"))
             return 0
         if options.command == "setup":
-            return _setup(harness, options.strategy, options.set, options.via)
+            return _setup(harness, options.strategy, options.set, options.via, options.autostart)
         if options.command == "strategy":
             return _strategy(options.name, options.set)
         if options.command == "settings":
@@ -96,6 +100,11 @@ def main(argv: list[str] | None = None) -> int:
             return _change(changes, tuple(getattr(options, "names", ())))
         if options.command == "status":
             return _status()
+        if options.command == "start":
+            now = service.ensure()
+            print(f"Relay runs {now['strategy']} at {service.address()}" if now else
+                  f"Relay did not start: see {service.log_file()}", file=sys.stdout if now else sys.stderr)
+            return 0 if now else 1
         if options.command == "stop":
             kind = service.stop()
             print(f"stopped Relay ({kind})" if kind else "Relay was not running as a service")
@@ -116,8 +125,9 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _setup(harness: Harness, strategy: str | None, assignments: list[str], via: str) -> int:
-    """The settings saved, Relay running with them, then the harness pointed at it."""
+def _setup(harness: Harness, strategy: str | None, assignments: list[str], via: str, autostart: bool) -> int:
+    """The settings saved, Relay running with them, then the harness pointed at it (and, where it
+    runs a command as a session starts, made to start Relay)."""
 
     changes = dict(map(settings.parse, assignments)) | ({"strategy": strategy} if strategy else {})
     if changes.get("strategy", "compaction") not in STRATEGIES:
@@ -125,18 +135,30 @@ def _setup(harness: Harness, strategy: str | None, assignments: list[str], via: 
     restart = bool(AT_START & set(changes))
     settings.save(changes)
     wanted = settings.value("strategy", "compaction")
-    if service.status() is None or (restart and service.record()):
-        kind = service.restart() if service.record() else service.start()
-        print(f"started Relay as a service ({kind or service.record().get('manager')})")
-        if kind == "process":
-            print("  note: no service manager here: Relay runs until this machine restarts; run `relay setup` again then")
+    managed = service.record().get("manager") in ("systemd", "launchd")
+    if autostart and not managed:
+        kind = service.start(autostart=True)
+    elif service.status() is None:
+        kind = service.start() if not managed else (service.restart() or service.record()["manager"])
+    elif restart and service.record():
+        kind = service.restart() or service.record()["manager"]
+    else:
+        kind = None  # (running, and following the settings)
+    if kind:
+        print(f"started Relay ({'as a ' + kind + ' service' if kind != 'process' else 'as a process of its own'})")
+        if autostart and kind == "process":
+            print("  note: no service manager here: Relay runs as a process of its own")
     if service.wait(wanted) is None:
         print(f"relay setup: Relay did not answer at {service.address()} running {wanted}; the harness is left as it was."
               f"\n{_tail(service.log_file())}", file=sys.stderr)
         return 1
     print(f"Relay runs {wanted} at {service.address()}")
-    if harness.name not in install.installed() and _install(harness, via, service.address()):
+    starter = harness.starter(service.start_command())
+    if harness.name not in install.installed() and _install(harness, via, service.address(), starter):
         return 1
+    if not starter and service.record().get("manager") == "process":
+        print(f"  note: {harness.name} cannot start Relay itself: after this machine restarts, run `relay start` "
+              f"(or set Relay up with --autostart)")
     print(f"{harness.name} goes through Relay: conversations started from now on use {wanted}; one already "
           f"open goes on as it was until a new one is started (`relay help`, \"Which conversations change\")")
     return 0
@@ -175,7 +197,9 @@ def _change(changes: dict, removed: tuple[str, ...]) -> int:
 def _status() -> int:
     now, entry = service.status(), service.record()
     print(f"Relay: {'running at ' + service.address() + ', strategy ' + now['strategy'] if now else 'not running'}")
-    print(f"service: {entry.get('manager', 'none')}")
+    kept = {"process": f"a process of its own (pid {entry.get('pid')})", "systemd": "a systemd user service",
+            "launchd": "a launchd agent"}
+    print(f"kept running by: {kept.get(entry.get('manager'), 'nothing (started by hand?)')}")
     print(f"harnesses set up: {', '.join(install.installed()) or 'none'}")
     print(f"settings: {settings.path()}")
     return 0 if now else 1
@@ -188,11 +212,11 @@ def _tail(path: Path, lines: int = 20) -> str:
         return ""
 
 
-def _install(harness: Harness, via: str, url: str) -> int:
+def _install(harness: Harness, via: str, url: str, extra: list | None = None) -> int:
     try:
         path = integrations.choose(harness, via)
         setup = path.installation(url)
-        install.install(harness.name, url, setup.settings)
+        install.install(harness.name, url, [*setup.settings, *(extra or [])])
     except ValueError as error:
         print(f"relay install: {error}", file=sys.stderr)
         return 1

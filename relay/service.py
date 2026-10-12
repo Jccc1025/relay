@@ -1,22 +1,29 @@
-"""Relay as a service of the user's: started by `relay setup`, kept running, stopped by `relay stop`.
+"""Relay as a process of the user's: started by `relay setup` and `relay start`, stopped by `relay stop`.
 
-A harness pointed at Relay cannot reach its model while Relay is down, so Relay runs under the
-system's service manager, which starts it at login and again if it exits: a systemd user unit on
-Linux, a launchd agent on macOS. Where there is neither (a container, a minimal system), Relay
-runs as a process of its own, outside the session that started it, until the machine restarts.
-What runs it is recorded in Relay's directory (`service.json`), for `relay stop` to undo.
+A harness pointed at Relay reaches its model only through Relay, so Relay must be running. By
+default it runs as a process of its own (a daemon: its pid and its log in Relay's directory),
+outside the session that started it, and nothing is registered with the system. A harness that
+runs a command as a session starts (Claude Code's SessionStart hook) runs `relay start`, which
+returns at once while Relay answers and starts it otherwise, so a machine's restart costs
+nothing. `relay setup --autostart` registers Relay with the system's service manager instead
+(a systemd user unit on Linux, a launchd agent on macOS), which starts it at login and again if it
+exits. What runs it is recorded in Relay's directory (`service.json`), for `relay stop` to undo.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import time
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -108,10 +115,11 @@ def agent() -> str:
             f"<key>StandardErrorPath</key><string>{log_file()}</string></dict></plist>\n")
 
 
-def start() -> str:
-    """Run Relay under the service manager (started now, and at every login); which one."""
+def start(autostart: bool = False) -> str:
+    """Run Relay: a daemon of its own, or with `autostart` under the service manager (started now
+    and at every login); which one."""
 
-    kind = manager()
+    kind = manager() if autostart else "process"
     log_file().parent.mkdir(parents=True, exist_ok=True)
     if kind == "systemd":
         path = Path("~/.config/systemd/user/relay.service").expanduser()
@@ -120,8 +128,6 @@ def start() -> str:
         _run(["systemctl", "--user", "daemon-reload"])
         _run(["systemctl", "--user", "enable", "--now", f"{NAME}.service"])
         _run(["systemctl", "--user", "restart", f"{NAME}.service"])  # (an older one: the current settings)
-        # Without lingering, a user's services stop when their last session ends (a remote machine).
-        subprocess.run(["loginctl", "enable-linger", os.environ.get("USER", "")], capture_output=True)
         _remember({"manager": kind, "path": str(path)})
     elif kind == "launchd":
         path = Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
@@ -132,12 +138,44 @@ def start() -> str:
         _run(["launchctl", "bootstrap", domain, str(path)])
         _remember({"manager": kind, "path": str(path)})
     else:
-        stop_process()
-        with log_file().open("ab") as log:
-            process = subprocess.Popen(command(), cwd=PACKAGE, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                       start_new_session=True)  # (outside the caller's session and its signals)
-        _remember({"manager": kind, "pid": process.pid})
+        with _locked():  # (two sessions starting at once start one Relay)
+            _daemon()
     return kind
+
+
+def _daemon() -> None:
+    """Relay as a process of its own, outside the caller's session and its signals (lock held)."""
+
+    stop_process()
+    _rotate()
+    with log_file().open("ab") as log:
+        process = subprocess.Popen(command(), cwd=PACKAGE, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                   start_new_session=True)
+    _remember({"manager": "process", "pid": process.pid})
+
+
+def ensure(seconds: float = 20.0) -> dict[str, Any] | None:
+    """Relay running: at once if it answers, else started as it was set up (its status, or None)."""
+
+    if (now := status(timeout=1.0)) is not None:
+        return now
+    entry = record()
+    if entry.get("manager") in ("systemd", "launchd"):
+        restart()
+    else:
+        with _locked():
+            if status(timeout=1.0) is None:  # (not started meanwhile by another session)
+                _daemon()
+    return wait(seconds=seconds)
+
+
+def start_command() -> str:
+    """A shell command that makes sure Relay runs, cheap while it does, and says nothing (a
+    harness's hook: some add what a session-start hook prints to the model's context)."""
+
+    probe = f"import urllib.request as u; u.urlopen('{address()}/relay/v1/status', timeout=1)"
+    start = f"cd {shlex.quote(str(PACKAGE))} && {' '.join(map(shlex.quote, command()[:-1]))} start"
+    return f'{shlex.quote(sys.executable)} -c "{probe}" >/dev/null 2>&1 || ({start}) >/dev/null 2>&1; true'
 
 
 def restart() -> None:
@@ -184,6 +222,21 @@ def stop_process() -> None:
         except OSError:
             return
         time.sleep(0.1)
+
+
+def _rotate(limit: int = 5 * 1024 * 1024) -> None:
+    """Keep the log small: past `limit`, the next start begins a new one (the last one kept)."""
+
+    if log_file().exists() and log_file().stat().st_size > limit:
+        log_file().replace(log_file().with_suffix(".log.1"))
+
+
+@contextmanager
+def _locked() -> Iterator[None]:
+    settings.home().mkdir(parents=True, exist_ok=True)
+    with (settings.home() / "start.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 def _run(arguments: list[str]) -> None:

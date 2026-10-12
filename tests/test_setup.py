@@ -132,6 +132,61 @@ class SetupTests(unittest.TestCase):
         self.assertIn("For a coding agent asked to set Relay up", out)
 
 
+class StarterTests(unittest.TestCase):
+    """What `relay setup` adds to a harness so that it starts Relay itself, and takes back."""
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp())
+        patcher = mock.patch.dict(os.environ, {"RELAY_HOME": str(self.root / "relay"), "HOME": str(self.root),
+                                               "CLAUDE_CONFIG_DIR": str(self.root / "claude"),
+                                               "KIMI_CODE_HOME": str(self.root / "kimi"),
+                                               "PI_CODING_AGENT_DIR": str(self.root / "pi")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_start_command_says_nothing_and_succeeds_while_relay_runs(self) -> None:
+        with mock.patch.object(service, "address", return_value="http://127.0.0.1:9"):
+            command = service.start_command()
+        self.assertIn(">/dev/null 2>&1", command)  # (a session-start hook's output reaches the model)
+        self.assertTrue(command.endswith("; true"))
+
+    def test_claude_codes_hook_follows_the_users_and_goes_with_uninstall(self) -> None:
+        from relay.harnesses import HARNESSES
+        from relay.harnesses.claude_code import settings_file
+
+        own = {"hooks": [{"type": "command", "command": "echo mine"}]}
+        settings_file().parent.mkdir(parents=True)
+        settings_file().write_text(json.dumps({"hooks": {"SessionStart": [own]}}))
+        install.install("claude_code", "http://relay", HARNESSES["claude_code"].starter("relay-start"))
+        hooks = json.loads(settings_file().read_text())["hooks"]["SessionStart"]
+        self.assertEqual((hooks[0], hooks[1]["hooks"][0]["command"]), (own, "relay-start"))
+        install.uninstall("claude_code")
+        self.assertEqual(json.loads(settings_file().read_text())["hooks"]["SessionStart"], [own])
+
+    def test_a_plugin_file_is_written_with_the_command_and_removed(self) -> None:
+        from relay.harnesses import HARNESSES
+
+        install.install("pi", "http://relay", HARNESSES["pi"].starter("relay-start"))
+        plugin = self.root / "pi" / "extensions" / "relay-start.ts"
+        self.assertIn('const COMMAND = "relay-start";', plugin.read_text())
+        install.uninstall("pi")
+        self.assertFalse(plugin.exists())
+
+    def test_kimi_codes_hook_is_valid_toml_after_the_users(self) -> None:
+        import tomllib
+
+        from relay.harnesses import HARNESSES
+
+        config = self.root / "kimi" / "config.toml"
+        config.parent.mkdir()
+        config.write_text('hooks = [{ event = "Stop", command = "echo mine" }]\n')
+        install.install("kimi_code", "http://relay", HARNESSES["kimi_code"].starter("relay-start"))
+        hooks = tomllib.loads(config.read_text())["hooks"]
+        self.assertEqual([h["event"] for h in hooks], ["Stop", "UserPromptSubmit"])
+        install.uninstall("kimi_code")
+        self.assertEqual(tomllib.loads(config.read_text())["hooks"], [{"event": "Stop", "command": "echo mine"}])
+
+
 class ServiceTests(unittest.TestCase):
     def test_the_service_runs_relay_and_restarts_it(self) -> None:
         with relay_settings():

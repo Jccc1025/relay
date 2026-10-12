@@ -50,6 +50,8 @@ class DeepSeekHarness(Harness):
             return f"instructions:{match.group(1)}"
         return None
 
+    # No `starter`: its hooks (through its Claude Code hooks bridge) run in its sandbox, where
+    # nothing can start Relay.
     def settings(self) -> list[Setting]:
         patch = Path(os.getenv("DSH_HOME", "~/.dsh")).expanduser() / "cordis.patch.yml"
         deepseek = os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/anthropic"

@@ -457,7 +457,7 @@ SPECS = {
 def run(name: str, growth: int | None = None, retried: bool = False, probe: bool = False,
         subagent: bool = False, window: int | None = None, native: bool = False, selfcompact: bool = False,
         via: str = "proxy", lines: int = 120, strategy: str = "compaction", steering: str | None = None,
-        clm_edit: bool = False) -> dict:
+        clm_edit: bool = False, cold: bool = False) -> dict:
     spec, harness = SPECS[name], name.split(":")[0]
     root = Path(tempfile.mkdtemp(prefix=f"relay-{name.replace(':', '-')}-", dir=os.getenv("TMPDIR")))
     home, project = root / "home", root / "project"
@@ -512,14 +512,22 @@ def run(name: str, growth: int | None = None, retried: bool = False, probe: bool
                         "clm_nudges": "on" if POLICIES[steering].nudges else "off"}
     env = {"PROMPT": first, "PROMPT2": second, **trigger, "compact_min_gain": "0"}
     turn = 1800 if strategy.startswith("rlm") else 600  # an RLM works out every step before the model takes it
+    # `--cold-start`: `relay setup`, then Relay stopped before each turn (a machine restarted): the
+    # harness's hook must start it before its first request.
+    stop = "(cd /relay && python3 -m relay.cli stop >> ~/relay-setup.log 2>&1)" if cold else ""
+    setup = f"(cd /relay && python3 -m relay.cli setup {harness} --via {via} >> ~/relay-setup.log 2>&1)\n{stop}"
     container(name, root, env, f"""
         cd /project && timeout {turn} {spec.command} > ~/harness.out 2> ~/harness.err < /dev/null
         {f'export PROMPT="{NATIVE_COMPACT[harness]}" && cd /project && timeout 300 {spec.resume} > ~/compact.out 2>&1 < /dev/null' if native else ""}
         export PROMPT="$PROMPT2"
         sed -i s/ALPHA/BETA/ {" ".join(STATE_FILES)}
+        {stop}
         {f"cd /project && timeout {turn} {spec.resume} > ~/harness2.out 2> ~/harness2.err < /dev/null" if spec.resume else ""}
-    """, timeout=2 * turn + 300, setup="\n".join([EARLY[harness] if selfcompact else "", RECORDER if via == "hook" else ""]),
-              via=via)
+        {stop}
+        {"cat ~/.config/relay/relay.log >> ~/relay.log 2>/dev/null" if cold else ""}
+    """, timeout=2 * turn + 300, setup="\n".join([EARLY[harness] if selfcompact else "", RECORDER if via == "hook" else "",
+                                                 setup if cold else ""]),
+              via=via, install=not cold, serve=not cold)
     if probe:
         return {"name": name, "home": str(home)}
     if via == "hook":
@@ -534,10 +542,17 @@ def run(name: str, growth: int | None = None, retried: bool = False, probe: bool
         return BASELINES[strategy](name, home)
     # Relay's own trigger compacts less often; after the harness compacted itself, turn 2 starts small.
     result = evaluate(name, home, need=(0, 0) if window else (2, 0) if native else None, selfcompact=selfcompact)
+    if cold:  # Relay was started by the harness's hook, once for each turn
+        log = (home / "relay.log").read_text(errors="replace") if (home / "relay.log").exists() else ""
+        starts = log.count("Uvicorn running on") - 1  # (not the one `relay setup` started and stopped)
+        result["relay_starts"] = starts
+        if starts < 1 + bool(spec.resume):
+            result["problems"].append(f"Relay was started {starts}× by the harness, not before each turn")
+            result["passed"] = False
     if not result["passed"] and result["transient"] and result["requests"] < 3 and not retried:
         time.sleep(60)  # rate-limited before the task got going: try once more
         return run(name, growth, retried=True, subagent=subagent, window=window, native=native, selfcompact=selfcompact,
-                   via=via, lines=lines, strategy=strategy, steering=steering, clm_edit=clm_edit)
+                   via=via, lines=lines, strategy=strategy, steering=steering, clm_edit=clm_edit, cold=cold)
     return result
 
 
@@ -1509,6 +1524,8 @@ def main() -> int:
                         help="install through this path (hook: the harness compacts through Relay's hook)")
     parser.add_argument("--harness-compaction", action="store_true",
                         help="the harness's own auto-compaction set to fire early; it must stay off")
+    parser.add_argument("--cold-start", action="store_true",
+                        help="`relay setup`, then Relay stopped before each turn: the harness's hook must start it")
     options = parser.parse_args()
     names = options.names or (list(SPECS) if options.matrix else parser.error("name a spec or use --matrix"))
     if options.native_compact and (unsupported := [n for n in names if n.split(":")[0] not in NATIVE_COMPACT]):
@@ -1518,7 +1535,7 @@ def main() -> int:
         results.append(run(name, options.growth, probe=options.probe, subagent=options.subagent, window=options.window,
                            native=options.native_compact, selfcompact=options.harness_compaction, via=options.via,
                            lines=options.file_lines, strategy=options.strategy, steering=options.steering,
-                           clm_edit=options.clm_edit))
+                           clm_edit=options.clm_edit, cold=options.cold_start))
         if options.probe:
             print(f"== {name}: probe recorded  ({results[-1]['home']})")
         else:

@@ -12,13 +12,39 @@ and more. The harness, its login and its provider stay as they are.
 This does three things, in order:
 
 1. It saves the strategy (and any `--set name=value`) in Relay's settings.
-2. It starts Relay as a service of yours, so it runs at every login and again if it stops.
+2. It starts Relay as a process of its own, a daemon. Its pid and log are in
+   `~/.config/relay/`. Nothing is registered with the system.
 3. Once Relay answers, it points the harness at it. `relay install` edits only the harness's
    own config file, and records the old values.
 
 If Relay does not start, the harness is left untouched. The harness names are `codex`,
 `claude`, `gemini_cli`, `pi`, `opencode`, `kilo`, `crush`, `openclaw`, `goose`, `kimi_code`,
 `hermes`, `nanobot`, `dsh`, `workbuddy` and `mini`.
+
+### Keeping Relay running
+
+A harness pointed at Relay reaches its model only through Relay. Where the harness can run a
+command before its first model request, `relay setup` adds one. It runs `relay start`, which
+returns at once while Relay answers and starts it otherwise, so a machine's restart costs nothing.
+The command says nothing, and it never sees or changes a conversation. `relay uninstall` removes
+it with the rest.
+
+| Harness | What runs `relay start` |
+| --- | --- |
+| Claude Code, WorkBuddy / CodeBuddy, Gemini CLI | a `SessionStart` hook in its settings |
+| Kimi Code | a `UserPromptSubmit` hook (each prompt) |
+| pi | an extension (each agent run) |
+| OpenCode, Kilo | a plugin (each model request) |
+| Hermes Agent | a plugin, enabled in `plugins.enabled` (each model request) |
+| Codex, DeepSeek Harness, OpenClaw, Crush, Goose, nanobot, mini-swe-agent | nothing: after a restart, run `relay start` |
+
+Codex runs a hook only once its user has trusted it in Codex, and Relay does not trust hooks on
+anyone's behalf. DeepSeek Harness runs its hooks in its sandbox, where nothing can start Relay.
+Hermes's shell hooks need consent too, so its hook is a plugin.
+
+`relay setup <harness> --autostart` registers Relay with the system's service manager instead:
+a systemd user unit on Linux, a launchd agent on macOS. That starts Relay at login and again if
+it exits, for any harness. `relay stop` removes it.
 
 ## Changing the strategy
 
@@ -42,7 +68,7 @@ history as the harness has it. Switching back finds the earlier strategy's conte
 
 1. Install the package, for example `pip install <its source>`. This needs network access.
 2. Run `relay setup <your harness> --strategy <name>` outside your sandbox: it writes the
-   harness's config in the home directory and starts a service. Ask the user to approve it
+   harness's config in the home directory and starts Relay. Ask the user to approve it
    (in Codex, a command that runs with escalated permissions).
 3. Run `relay status` and check that it reports the strategy.
 4. Tell the user that the strategy applies to conversations started from now on, and that
@@ -75,7 +101,7 @@ for another one, set `context_window`.
     relay unset clm_budget
 
 Values are JSON where they parse as JSON (`26000`, `true`), text otherwise. Most settings apply
-from the next request. Some only apply when Relay starts, and `relay set` restarts the service
+from the next request. Some only apply when Relay starts, and `relay set` restarts Relay
 for them:
 
 - where Relay listens: `host` (127.0.0.1), `port` (8787);
@@ -87,15 +113,16 @@ for them:
 ## Checking and undoing
 
     relay status                   # running?, its strategy, what keeps it running, the harnesses set up
+    relay start                    # make sure Relay runs (what the harnesses' hooks run)
     relay uninstall codex          # put the harness's config back as it was
-    relay stop                     # stop Relay and remove its service
+    relay stop                     # stop Relay (and remove its service)
 
 While a harness points at Relay, it reaches its model only through Relay. If a model request
-fails because nothing answers at Relay's address, run `relay status`, read the log
-(`~/.config/relay/relay.log`), and `relay setup` again, or `relay uninstall` the harness.
+fails because nothing answers at Relay's address, run `relay start`. If that does not help, read
+the log (`~/.config/relay/relay.log`), or `relay uninstall` the harness.
 
 ## Other commands
 
-    relay serve                    # run Relay in the foreground (what the service runs)
+    relay serve                    # run Relay in the foreground (what its daemon runs)
     relay install <harness>        # only point a harness at Relay (`--via hook`: Claude Code's hook)
     relay run codex -- <args>      # one run through a private, temporary Relay

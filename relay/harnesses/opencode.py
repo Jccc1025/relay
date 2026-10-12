@@ -6,12 +6,18 @@ import os
 from pathlib import Path
 
 from ..install import Setting
-from .base import Harness
+from .base import Harness, plugin_file
 
 
 class OpenCode(Harness):
     name = "opencode"
     config_file = "opencode/opencode.json"
+
+    def starter(self, command: str) -> list[Setting]:
+        """A plugin of Relay's: it loads every file in its global plugin folder."""
+
+        folder = (Path(os.getenv("XDG_CONFIG_HOME", "~/.config")).expanduser() / self.config_file).parent / "plugin"
+        return [plugin_file(folder / "relay-start.js", "opencode/relay-start.js", command)]
 
     def settings(self) -> list[Setting]:
         config = Path(os.getenv("XDG_CONFIG_HOME", "~/.config")).expanduser() / self.config_file

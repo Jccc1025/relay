@@ -15,7 +15,7 @@ from pathlib import Path
 from ..core.ir import Item, Kind
 from ..install import Setting
 from ..protocols.base import Codec, WireItem
-from .base import REMINDER, Harness
+from .base import REMINDER, Harness, command_hook
 # Slash commands and their output, which Claude Code writes into a user message, at times
 # together with what the user typed next (`/compact` followed by the next request).
 COMMAND = re.compile(
@@ -63,6 +63,9 @@ class ClaudeCode(Harness):
         if text.startswith("# MCP Server Instructions") or "MCP servers have disconnected" in text:
             return "mcp"
         return None
+
+    def starter(self, command: str) -> list[Setting]:
+        return [command_hook(settings_file(), "SessionStart", command)]  # (it runs before the first request)
 
     def settings(self) -> list[Setting]:
         return [Setting(settings_file(), ("env", "ANTHROPIC_BASE_URL"), endpoint="https://api.anthropic.com"),

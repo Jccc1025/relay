@@ -10,7 +10,7 @@ import re
 
 from ..core.ir import Item, Kind
 from ..install import Setting
-from .base import Harness
+from .base import Harness, plugin_file
 
 
 SECTION = re.compile(r'Updated system prompt section "([^"]+)"')
@@ -27,6 +27,12 @@ class Pi(Harness):
             return None
         section = SECTION.match(item.text)
         return f"section:{section.group(1)}" if section else "system"
+
+    def starter(self, command: str) -> list[Setting]:
+        """An extension of Relay's: pi loads every file in its extensions folder."""
+
+        folder = Path(os.getenv("PI_CODING_AGENT_DIR", "~/.pi/agent")).expanduser() / "extensions"
+        return [plugin_file(folder / "relay-start.ts", "pi/relay-start.ts", command)]
 
     def matches(self, headers: Mapping[str, str]) -> bool:
         return headers.get("user-agent", "").startswith(("pi/", "pi ("))

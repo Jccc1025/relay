@@ -10,7 +10,7 @@ from pathlib import Path
 from ..core.ir import Item, Kind
 from ..install import Setting
 from ..protocols.base import Codec, WireItem, canonical_json
-from .base import NEVER, REMINDER, Harness
+from .base import NEVER, REMINDER, Harness, command_hook
 
 CONTEXT_PREFIX = "This is the Gemini CLI. We are setting up the context"
 
@@ -41,6 +41,9 @@ class GeminiCli(Harness):
             if calls and all(id for _, id in calls):
                 keys[index] = b"\0result\0" + canonical_json(list(dict.fromkeys(calls)))
         return keys
+
+    def starter(self, command: str) -> list[Setting]:
+        return [command_hook(Path("~/.gemini/settings.json").expanduser(), "SessionStart", command, timeout=30_000)]  # (ms)
 
     def settings(self) -> list[Setting]:
         env, settings = Path("~/.gemini/.env").expanduser(), Path("~/.gemini/settings.json").expanduser()

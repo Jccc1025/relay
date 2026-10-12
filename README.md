@@ -29,9 +29,13 @@ relay stop                         # stop Relay and remove its service
 relay help                         # the guide, for people and for agents setting Relay up
 ```
 
-`relay setup` saves the settings, starts Relay as a service of the user's (a systemd user unit, a
-launchd agent, or a process of its own where there is neither), and once Relay answers, points
-the harness at it. A harness reads its configuration as a conversation starts: conversations
+`relay setup` saves the settings, starts Relay as a process of its own (registered with nothing;
+`--autostart` makes it a systemd user unit or launchd agent instead), and once Relay answers,
+points the harness at it. Where the harness runs a command before its first model request (a
+session-start or prompt hook, an extension or a plugin: Claude Code, WorkBuddy, Gemini CLI, Kimi
+Code, pi, OpenCode, Kilo, Hermes), setup adds one that runs `relay start`, so
+Relay starts again whenever it is needed; the hook only keeps Relay running and never sees the
+conversation, which still goes through the proxy. A harness reads its configuration as a conversation starts: conversations
 started after `relay setup` go through Relay; one already open goes on as it was. Once a harness
 goes through Relay, a strategy changed with `relay strategy` applies to every conversation from
 its next request, with no restart. `relay uninstall` sends new conversations to the provider
