@@ -5,6 +5,17 @@ Gemini CLI, pi, OpenCode and others: a "harness") and the model's API, and on ev
 its strategy decides the context: Codex's compaction, a context the model edits itself (CLM),
 and more. The harness, its login and its provider stay as they are.
 
+## Installing
+
+    curl -fsSL https://raw.githubusercontent.com/sunnweiwei/relay/main/install.sh | sh
+
+This gives Relay an environment of its own: uv's, where uv is installed, or else a virtual
+environment in `~/.local/share/relay`. It puts the `relay` command in `~/.local/bin` and, if that
+folder is not on PATH, adds it to `~/.profile` (and `~/.bashrc` or `~/.zshrc`) for shells started
+afterwards. From a
+checkout, run `sh install.sh .`. Running the installer again upgrades Relay. It needs Python
+3.11 or newer, or uv.
+
 ## Setting it up
 
     relay setup codex --strategy clm
@@ -17,7 +28,10 @@ This does three things, in order:
 3. Once Relay answers, it points the harness at it. `relay install` edits only the harness's
    own config file, and records the old values.
 
-If Relay does not start, the harness is left untouched. The harness names are `codex`,
+If Relay does not start, the harness is left untouched. If something else already listens on
+Relay's port (8787 by default), setup picks a free port and saves it. Relay compacts at the
+context window the harness itself gives the model where it can tell (Codex: its model catalog),
+and from its own table otherwise; `context_window` overrides both. The harness names are `codex`,
 `claude`, `gemini_cli`, `pi`, `opencode`, `kilo`, `crush`, `openclaw`, `goose`, `kimi_code`,
 `hermes`, `nanobot`, `dsh`, `workbuddy` and `mini`.
 
@@ -66,10 +80,19 @@ history as the harness has it. Switching back finds the earlier strategy's conte
 
 ## For a coding agent asked to set Relay up
 
-1. Install the package, for example `pip install <its source>`. This needs network access.
+1. Install it with the line under "Installing" (or `sh install.sh <checkout>`). This needs
+   network access. Use `~/.local/bin/relay` if that folder is not on PATH.
 2. Run `relay setup <your harness> --strategy <name>` outside your sandbox: it writes the
    harness's config in the home directory and starts Relay. Ask the user to approve it
-   (in Codex, a command that runs with escalated permissions).
+   (in Codex, a command that runs with escalated permissions). Run it even when the harness's
+   configuration looks empty or unusual. Relay knows where each harness keeps its settings,
+   records each value it changes, and `relay uninstall` puts them back.
+   If your harness's sandbox or command policy refuses the installer or `relay`, and asking the
+   user to approve is not possible (some refuse in headless runs, as DeepSeek Harness's sandbox
+   and Gemini CLI's command checker did in our tests), tell the user to run the installer and
+   `relay setup` in a terminal. Do the same if Relay stops as soon as your command ends.
+   OpenClaw ends every process a command started; there, `relay setup --autostart` in a
+   terminal keeps Relay running.
 3. Run `relay status` and check that it reports the strategy.
 4. Tell the user that the strategy applies to conversations started from now on, and that
    this one goes on as before. If Relay was already set up, the change applies from the next

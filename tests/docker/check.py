@@ -557,11 +557,12 @@ def run(name: str, growth: int | None = None, retried: bool = False, probe: bool
 
 
 def container(name: str, root: Path, env: dict[str, str], turns: str, timeout: int = 1500, install: bool = True,
-              setup: str = "", via: str = "proxy", serve: bool = True) -> None:
+              setup: str = "", via: str = "proxy", serve: bool = True, importable: bool = True) -> None:
     """Run `turns` (shell) on a user's machine, in the image: HOME is root/home and /project is
     root/project; the harness is configured as the user had it (`Spec.setup`), Relay serves (its
     process id in ~/relay.pid) and, unless `install` is false, `relay install` points the
-    harness at it (`serve` false: nothing of Relay's runs until the turns start it). Relay's events
+    harness at it (`serve` false: nothing of Relay's runs until the turns start it; `importable`
+    false: Relay is not on Python's path, only a checkout at /relay to install from). Relay's events
     and trace land in HOME."""
 
     spec, harness = SPECS[name], name.split(":")[0]
@@ -603,7 +604,7 @@ def container(name: str, root: Path, env: dict[str, str], turns: str, timeout: i
         {turns}
     """
     docker = ["docker", "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}", "-w", "/project",
-              "-e", "HOME=/home/agent", "-e", "PYTHONPATH=/relay"]
+              "-e", "HOME=/home/agent", *(["-e", "PYTHONPATH=/relay"] if importable else [])]
     for mount in mounts:
         docker += ["-v", mount]
     for var, value in env.items():

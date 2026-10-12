@@ -141,7 +141,7 @@ class Engine:
             current,
             frozenset(cut for cut in range(len(current) + 1) if position(cut) in legal),
             tokens,
-            self.window or context_window(body.get("model")),
+            self.window or harness.window(body.get("model")) or context_window(body.get("model")),
             force,
             state.get("base"),
             state.get("strategy"),

@@ -7,6 +7,7 @@ environment and instruction context as user messages; these markers mirror
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -142,6 +143,16 @@ class Codex(Harness):
             ),
         )
 
+    def window(self, model: str | None) -> int | None:
+        """From the model catalog Codex keeps (`models_cache.json`, fetched from its backend)."""
+
+        path = Path(os.getenv("CODEX_HOME", "~/.codex")).expanduser() / "models_cache.json"
+        try:
+            catalog = _catalog(path, path.stat().st_mtime_ns)
+        except OSError:
+            return None
+        return catalog.get(str(model).rsplit("/", 1)[-1]) if model else None
+
     def settings(self) -> list[Setting]:
         """Re-point the built-in OpenAI provider, so Codex keeps its own login and its
         ChatGPT-backend features (the wrapped URL keeps the `/backend-api/codex` path)."""
@@ -163,6 +174,18 @@ class Codex(Harness):
             'wire_api="responses",supports_websockets=false}'
         )
         return ["codex", "-c", 'model_provider="relay"', "-c", provider, *args], {}
+
+
+@functools.lru_cache(maxsize=2)
+def _catalog(path: Path, stamp: int) -> dict[str, int]:
+    """Each model's context window in Codex's model cache."""
+
+    try:
+        models = json.loads(path.read_text()).get("models") or []
+    except ValueError:
+        return {}
+    return {m["slug"]: m["context_window"] for m in models
+            if isinstance(m, dict) and isinstance(m.get("slug"), str) and isinstance(m.get("context_window"), int)}
 
 
 @dataclass(frozen=True)
